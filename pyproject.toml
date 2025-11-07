@@ -1,0 +1,91 @@
+[tool.poetry]
+name = "trading-ai"
+version = "0.1.0"
+description = "Automated options trading AI leveraging Alpaca, Polygon, and news sentiment."
+authors = ["Joey Bertrand <jbertrand45@users.noreply.github.com>"]
+readme = "README.md"
+packages = [{ include = "trading_ai", from = "src" }]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.13"
+alpaca-py = "^0.30.1"
+polygon-api-client = "^1.12.4"
+pandas = "^2.2.3"
+numpy = "^2.1.3"
+scikit-learn = "^1.5.2"
+torch = "^2.5.1"
+pydantic = "^2.9.2"
+pydantic-settings = "^2.6.1"
+python-dotenv = "^1.0.1"
+requests = "^2.32.3"
+typer = "^0.12.5"
+rich = "^13.9.4"
+loguru = "^0.7.2"
+httpx = "^0.27.2"
+tenacity = "^9.0.0"
+orjson = "^3.10.7"
+feedparser = "^6.0.11"
+duckdb = "^1.4.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.3"
+pytest-asyncio = "^0.24.0"
+black = "^24.10.0"
+ruff = "^0.7.1"
+isort = "^5.13.2"
+mypy = "^1.13.0"
+pre-commit = "^3.8.0"
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+src_paths = ["src", "tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E",
+  "F",
+  "I",
+  "N",
+  "B",
+  "UP",
+  "ANN",
+  "ASYNC",
+  "S",
+  "DTZ",
+  "A",
+  "C4",
+  "T20",
+  "Q",
+  "RUF"
+]
+ignore = [
+  "ANN101",
+  "ANN102",
+  "ANN401",
+  "S101"
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+addopts = "-ra -q"
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_ignores = true
+strict_optional = true
+exclude = ["tests/"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
