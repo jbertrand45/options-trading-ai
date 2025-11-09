@@ -17,3 +17,14 @@ def test_settings_parses_comma_separated_tickers(monkeypatch: pytest.MonkeyPatch
     settings = Settings()
 
     assert settings.target_tickers == ["SPY", "QQQ", "TSLA"]
+
+
+def test_settings_alpaca_data_feed_defaults_to_iex(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
+    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
+    monkeypatch.setenv("POLYGON_API_KEY", "polygon")
+    monkeypatch.delenv("ALPACA_DATA_FEED", raising=False)
+
+    settings = Settings()
+
+    assert settings.alpaca_data_feed == "IEX"

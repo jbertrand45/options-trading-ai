@@ -50,15 +50,34 @@ class NewsAggregator:
             except APIClientError:
                 logger.warning("News provider failed", ticker=ticker, provider=provider.__qualname__)
                 continue
-            except Exception:
-                logger.debug("News provider disabled or misconfigured", ticker=ticker, provider=provider.__qualname__)
+            except Exception as exc:
+                logger.debug(
+                    "News provider disabled or misconfigured",
+                    ticker=ticker,
+                    provider=provider.__qualname__,
+                    error=str(exc),
+                )
                 continue
             for article in articles:
-                title = (article.get("title") or "").strip()
-                key = (title, article.get("link"))
+                normalized = _normalize_article(article)
+                title = (normalized.get("title") or "").strip()
+                key = (title, normalized.get("link"))
                 if title and key not in seen:
-                    combined.append(article)
+                    combined.append(normalized)
                     seen.add(key)
             if len(combined) >= limit:
                 break
         return combined[:limit]
+
+
+def _normalize_article(article: Any) -> Dict[str, Any]:
+    if isinstance(article, dict):
+        return article
+    if hasattr(article, "model_dump"):
+        try:
+            return article.model_dump()
+        except Exception:  # pragma: no cover - defensive
+            pass
+    if hasattr(article, "__dict__"):
+        return dict(article.__dict__)
+    return {"title": str(article), "link": None}

@@ -10,8 +10,8 @@
 | Source  | Purpose | Notes |
 |---------|---------|-------|
 | Alpaca  | Execution, option chains, latest quotes | Live/paper trading and baseline data. |
-| Polygon | Historical chains, Greeks, intraday bars | Starter pack quota; cache aggressively. |
-| Polygon News + Yahoo RSS + Alpha Vantage + Marketaux + NewsAPI | Intraday catalysts & sentiment ensemble | Aggregated to boost coverage and reduce dependency on any single feed. |
+| Polygon/Massive | Historical chains, Greeks, intraday bars, open interest | Options Developer tier now wired in; cache aggressively and leverage new greeks/OI payload. |
+| Polygon News + Yahoo RSS + Alpha Vantage + Marketaux + NewsAPI | Intraday catalysts & sentiment ensemble | Aggregated to boost coverage and reduce dependency on any single feed (resolve DNS/auth for Massive/NewsAPI before enabling). |
 
 ### Signal Stack
 1. **Feature extraction** (`trading_ai.features`):

@@ -28,6 +28,7 @@ class StrategyContext:
     ticker: str
     underlying_bars: pd.DataFrame
     option_chain: Any
+    option_metrics: Dict[str, Any] | None
     option_quote: Any
     news_items: list[Dict[str, Any]]
     features: Dict[str, Any] | None = None

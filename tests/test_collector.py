@@ -55,6 +55,7 @@ class DummyPolygon:
     def __init__(self) -> None:
         self.calls = 0
         self.bar_calls = 0
+        self.contract_calls = 0
 
     def fetch_reference_news(self, **_: Any) -> Iterable[Dict[str, Any]]:
         self.calls += 1
@@ -63,6 +64,27 @@ class DummyPolygon:
     def fetch_equity_bars(self, **_: Any) -> Iterable[Dict[str, Any]]:
         self.bar_calls += 1
         return [{"timestamp": 1, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 1000}]
+
+    def fetch_option_contracts(self, *args: Any, **kwargs: Any) -> Iterable[Dict[str, Any]]:
+        self.contract_calls += 1
+        return [
+            {
+                "ticker": "AAPL251107C00100000",
+                "contract_type": "call",
+                "strike_price": 100.0,
+                "implied_volatility": 0.25,
+                "open_interest": 120,
+                "greeks": {"delta": 0.5, "gamma": 0.1},
+            },
+            {
+                "ticker": "AAPL251107P00100000",
+                "contract_type": "put",
+                "strike_price": 100.0,
+                "implied_volatility": 0.28,
+                "open_interest": 80,
+                "greeks": {"delta": -0.5, "gamma": 0.1},
+            },
+        ]
 
 
 class DummyAggregator:
@@ -200,3 +222,27 @@ def test_market_data_collector_falls_back_to_latest_trade(tmp_path, monkeypatch:
     assert len(bars) == 1
     assert bars.iloc[0]["close"] == pytest.approx(100.5)
     assert alpaca.trade_calls == 1
+
+
+def test_market_data_collector_collects_option_metrics(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = build_settings(monkeypatch)
+    cache = LocalDataCache(root=tmp_path / "cache")
+    collector = MarketDataCollector(
+        settings,
+        cache=cache,
+        alpaca_client=DummyAlpaca(),  # type: ignore[arg-type]
+        polygon_client=DummyPolygon(),  # type: ignore[arg-type]
+        aggregator=DummyAggregator(),  # type: ignore[arg-type]
+    )
+
+    result = collector.collect_market_snapshot(
+        tickers=["AAPL"],
+        lookback=timedelta(hours=2),
+        news_lookback=timedelta(hours=1),
+        timeframe="1Min",
+        use_cache=False,
+    )
+
+    metrics = result["AAPL"]["option_metrics"]
+    assert "AAPL251107C00100000" in metrics
+    assert metrics["AAPL251107C00100000"]["implied_volatility"] == pytest.approx(0.25)

@@ -124,9 +124,45 @@ class BacktestRunner:
     def _simulate_exit_price(self, signal: TradingSignal, context: StrategyContext, entry_price: float) -> float:
         if signal.target_price:
             return signal.target_price
-        # Placeholder: simple momentum assumption +/- 20%
+
+        underlying_return = self._underlying_return(context)
+        if underlying_return is not None:
+            direction = 1 if signal.direction == "CALL" else -1
+            delta_hint = self._signal_delta_hint(signal)
+            leverage = max(1.5, min(8.0, abs(delta_hint) * 12))
+            option_return = direction * underlying_return * leverage
+            projected = entry_price * (1 + option_return)
+            floor_price = entry_price * 0.1
+            return max(floor_price, projected)
+
         direction = 1 if signal.direction == "CALL" else -1
         return entry_price * (1 + direction * 0.2 * signal.confidence)
+
+    def _underlying_return(self, context: StrategyContext) -> Optional[float]:
+        bars = context.underlying_bars
+        if not isinstance(bars, pd.DataFrame) or bars.empty or "close" not in bars:
+            return None
+        try:
+            close = bars["close"].astype(float)
+            start = float(close.iloc[0])
+            end = float(close.iloc[-1])
+        except (TypeError, ValueError, IndexError):
+            return None
+        if start <= 0:
+            return None
+        return (end - start) / start
+
+    def _signal_delta_hint(self, signal: TradingSignal) -> float:
+        metadata = signal.metadata or {}
+        delta = metadata.get("delta") or metadata.get("delta_bias")
+        try:
+            return float(delta)
+        except (TypeError, ValueError):
+            if signal.direction == "CALL":
+                return 0.5
+            if signal.direction == "PUT":
+                return -0.4
+            return 0.3
 
     def _max_drawdown(self, equity: pd.Series) -> float:
         running_max = equity.cummax()

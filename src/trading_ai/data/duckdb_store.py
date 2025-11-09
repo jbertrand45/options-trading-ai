@@ -54,6 +54,15 @@ class SnapshotStore:
             )
             """
         )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS option_metrics (
+                snapshot_ts TIMESTAMP,
+                ticker TEXT,
+                payload JSON
+            )
+            """
+        )
 
     def ingest_snapshot(self, snapshot: Dict[str, Dict[str, Any]]) -> None:
         for ticker, data in snapshot.items():
@@ -86,6 +95,13 @@ class SnapshotStore:
                         "INSERT INTO news_items VALUES (?, ?, ?::JSON)",
                         (snapshot_ts, ticker, story),
                     )
+
+            option_metrics = data.get("option_metrics") or {}
+            if option_metrics:
+                self.conn.execute(
+                    "INSERT INTO option_metrics VALUES (?, ?, ?::JSON)",
+                    (snapshot_ts, ticker, option_metrics),
+                )
 
     def list_snapshots(self) -> pd.DataFrame:
         return self.conn.execute(

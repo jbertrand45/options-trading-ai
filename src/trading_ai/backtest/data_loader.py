@@ -28,6 +28,7 @@ def contexts_from_snapshot(snapshot: Dict[str, Dict]) -> List[StrategyContext]:
             bars_df = pd.DataFrame()
 
         option_chain = data.get("option_chain")
+        option_metrics = data.get("option_metrics") or {}
         option_quote = data.get("option_quote") or {}
         news = data.get("news") or []
         features = data.get("features") or {}
@@ -36,6 +37,7 @@ def contexts_from_snapshot(snapshot: Dict[str, Dict]) -> List[StrategyContext]:
             ticker=ticker,
             underlying_bars=bars_df,
             option_chain=option_chain,
+            option_metrics=option_metrics,
             option_quote=option_quote,
             news_items=news,
             features=features,

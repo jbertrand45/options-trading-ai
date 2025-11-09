@@ -174,6 +174,45 @@ class MarketDataCollector:
             self.cache.write_json(serialized, *cache_key)
         return serialized
 
+    def collect_option_metrics(
+        self,
+        ticker: str,
+        *,
+        use_cache: bool = True,
+    ) -> Dict[str, Any]:
+        cache_key = ("polygon", "option-metrics", ticker, datetime.utcnow().date().isoformat())
+        if use_cache and self.cache.exists(*cache_key, suffix=".json"):
+            return self.cache.read_json(*cache_key)
+
+        try:
+            contracts = self.polygon.fetch_option_contracts(
+                ticker,
+                limit=self.settings.option_metrics_limit,
+                as_of=datetime.utcnow(),
+            )
+        except APIClientError:
+            logger.warning("Polygon option metrics unavailable", ticker=ticker)
+            return {}
+
+        metrics: Dict[str, Any] = {}
+        for contract in contracts:
+            payload = self._serialize_payload(contract) or {}
+            symbol = payload.get("ticker") or payload.get("symbol")
+            if not symbol:
+                continue
+            greeks = payload.get("greeks") or {}
+            metrics[symbol] = {
+                "contract_type": payload.get("contract_type"),
+                "expiration_date": payload.get("expiration_date"),
+                "strike_price": payload.get("strike_price"),
+                "implied_volatility": payload.get("implied_volatility"),
+                "open_interest": payload.get("open_interest"),
+                "greeks": greeks,
+            }
+        if metrics:
+            self.cache.write_json(metrics, *cache_key)
+        return metrics
+
     def collect_option_quote(
         self,
         ticker: str,
@@ -313,6 +352,7 @@ class MarketDataCollector:
                 use_cache=use_cache,
             )
             option_chain = self.collect_option_chain(ticker, use_cache=use_cache)
+            option_metrics = self.collect_option_metrics(ticker, use_cache=use_cache)
             option_quote = self.collect_option_quote(
                 ticker,
                 option_chain=option_chain,
@@ -326,6 +366,7 @@ class MarketDataCollector:
                 "collected_at": now.isoformat(),
                 "underlying_bars": bars,
                 "option_chain": option_chain,
+                "option_metrics": option_metrics,
                 "option_quote": option_quote,
                 "news": news_items,
             }

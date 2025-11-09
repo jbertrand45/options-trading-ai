@@ -5,11 +5,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Iterable, Optional
 
+from urllib.parse import urlparse
+
 from loguru import logger
 from polygon import RESTClient
 
 from trading_ai.clients.base import APIClientError, BaseClient
 from trading_ai.settings import Settings
+from trading_ai.utils.dns import apply_dns_override
 
 
 class PolygonClient(BaseClient):
@@ -17,7 +20,10 @@ class PolygonClient(BaseClient):
 
     def __init__(self, settings: Settings) -> None:
         super().__init__("polygon")
-        self._client = RESTClient(api_key=settings.polygon_api_key)
+        if settings.polygon_api_override_ip:
+            override_host = urlparse(settings.polygon_base_url).netloc or "api.polygon.io"
+            apply_dns_override(override_host, settings.polygon_api_override_ip)
+        self._client = RESTClient(api_key=settings.polygon_api_key, base=settings.polygon_base_url)
 
     def fetch_option_aggregates(
         self,
@@ -63,6 +69,29 @@ class PolygonClient(BaseClient):
             logger.exception("Failed to fetch Polygon news", ticker=ticker)
             raise APIClientError(f"Polygon news error: {exc}") from exc
         self._log("Fetched Polygon news", ticker=ticker)
+        return response
+
+    def fetch_option_contracts(
+        self,
+        underlying: str,
+        *,
+        limit: int = 300,
+        as_of: Optional[datetime] = None,
+    ) -> Iterable[Any]:
+        """Fetch option contract references with greeks/open interest."""
+
+        try:
+            response = list(
+                self._client.list_options_contracts(
+                    underlying_ticker=underlying,
+                    limit=limit,
+                    as_of=as_of.date() if as_of else None,
+                )
+            )
+        except Exception as exc:  # pragma: no cover - network failure path
+            logger.exception("Failed to fetch Polygon option contracts", ticker=underlying)
+            raise APIClientError(f"Polygon option contracts error: {exc}") from exc
+        self._log("Fetched Polygon option contracts", ticker=underlying, count=len(response))
         return response
 
     def fetch_equity_bars(
