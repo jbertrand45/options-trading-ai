@@ -63,11 +63,14 @@ class SnapshotStore:
                 bars = pd.DataFrame(bars)
             if isinstance(bars, pd.DataFrame) and not bars.empty:
                 bars = bars.copy()
+                if "timestamp" in bars.columns:
+                    bars["timestamp"] = pd.to_datetime(bars["timestamp"])
                 bars["snapshot_ts"] = snapshot_ts
                 bars["ticker"] = ticker
                 cols = ["snapshot_ts", "ticker", "timestamp", "open", "high", "low", "close", "volume"]
                 bars = bars[cols]
-                self.conn.execute("INSERT INTO underlying_bars SELECT * FROM bars_df", {"bars_df": bars})
+                self.conn.register("bars_df", bars)
+                self.conn.execute("INSERT INTO underlying_bars SELECT * FROM bars_df")
 
             chain = data.get("option_chain")
             if chain:

@@ -7,11 +7,16 @@ from typing import Any
 
 from alpaca.data.enums import DataFeed
 from alpaca.data.historical import OptionHistoricalDataClient, StockHistoricalDataClient
-from alpaca.data.requests import OptionChainRequest, OptionLatestQuoteRequest, StockBarsRequest
+from alpaca.data.requests import (
+    OptionChainRequest,
+    OptionLatestQuoteRequest,
+    StockBarsRequest,
+    StockLatestTradeRequest,
+)
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.enums import OrderSide, TimeInForce, PositionIntent
 from loguru import logger
 
 from trading_ai.clients.base import APIClientError, BaseClient
@@ -24,6 +29,7 @@ class AlpacaClient(BaseClient):
     def __init__(self, settings: Settings) -> None:
         super().__init__("alpaca", {"mode": "paper"})
         self._settings = settings
+        self._data_feed = self._resolve_data_feed(settings.alpaca_data_feed)
         self._trading_client = TradingClient(
             api_key=settings.alpaca_api_key_id,
             secret_key=settings.alpaca_api_secret_key,
@@ -82,7 +88,7 @@ class AlpacaClient(BaseClient):
             start=start,
             end=end,
             timeframe=bar_timeframe,
-            feed=DataFeed.IEX,
+            feed=self._data_feed,
         )
         try:
             bars = self._equity_client.get_stock_bars(request)
@@ -115,6 +121,44 @@ class AlpacaClient(BaseClient):
         self._log("Submitted market order", symbol=symbol, side=side.value, qty=quantity)
         return response.id
 
+    def submit_option_order(
+        self,
+        *,
+        symbol: str,
+        quantity: int,
+        side: OrderSide,
+        time_in_force: TimeInForce = TimeInForce.DAY,
+        position_intent: PositionIntent = PositionIntent.BUY_TO_OPEN,
+    ) -> str:
+        """Submit an options order via Alpaca's trading client."""
+
+        order = MarketOrderRequest(
+            symbol=symbol,
+            qty=quantity,
+            side=side,
+            time_in_force=time_in_force,
+            position_intent=position_intent,
+        )
+        try:
+            response = self._trading_client.submit_order(order)
+        except Exception as exc:  # pragma: no cover - network failure path
+            logger.exception("Failed to submit option order", symbol=symbol, side=side)
+            raise APIClientError(f"Alpaca option order error: {exc}") from exc
+        self._log("Submitted option order", symbol=symbol, side=side.value, qty=quantity)
+        return response.id
+
+    def fetch_latest_trade(self, symbol: str) -> Any:
+        """Fetch the most recent trade for a stock."""
+
+        request = StockLatestTradeRequest(symbol_or_symbols=symbol)
+        try:
+            data = self._equity_client.get_stock_latest_trade(request)
+        except Exception as exc:  # pragma: no cover - network failure path
+            logger.exception("Failed to fetch latest stock trade from Alpaca", symbol=symbol)
+            raise APIClientError(f"Alpaca latest trade error: {exc}") from exc
+        self._log("Fetched latest trade", symbol=symbol)
+        return data
+
     def _parse_timeframe(self, value: str | TimeFrame) -> TimeFrame:
         if isinstance(value, TimeFrame):
             return value
@@ -136,3 +180,13 @@ class AlpacaClient(BaseClient):
                     amount = int(amount_part)
                 return TimeFrame(amount, unit)
         raise ValueError(f"Unsupported timeframe: {value}")
+
+    def _resolve_data_feed(self, feed_name: str) -> DataFeed:
+        normalized = (feed_name or "IEX").strip().upper()
+        mapping = {
+            "IEX": DataFeed.IEX,
+            "SIP": DataFeed.SIP,
+        }
+        if normalized not in mapping:
+            logger.warning("Unknown alpaca data feed '%s', defaulting to IEX", normalized)
+        return mapping.get(normalized, DataFeed.IEX)

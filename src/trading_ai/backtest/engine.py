@@ -109,6 +109,8 @@ class BacktestRunner:
         if signal.entry_price:
             return signal.entry_price
         quote = context.option_quote
+        if isinstance(quote, dict) and ("CALL" in quote or "PUT" in quote):
+            quote = quote.get(signal.direction) or quote.get("CALL") or quote.get("PUT")
         bid = None
         ask = None
         if isinstance(quote, dict):

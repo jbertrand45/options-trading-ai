@@ -11,7 +11,10 @@ import orjson
 import pandas as pd
 
 from trading_ai.core.pipeline import SignalPipeline
+from trading_ai.risk.manager import RiskManager
+from trading_ai.service.auto_trader import AutoTrader, AutoTraderConfig
 from trading_ai.settings import get_settings
+from trading_ai.strategies.momentum_iv import MomentumIVStrategy
 
 
 def command_check_config(args: argparse.Namespace) -> None:
@@ -51,6 +54,49 @@ def command_collect_snapshots(args: argparse.Namespace) -> None:
     print(f"Snapshot saved to {path}")
 
 
+def command_auto_trade(args: argparse.Namespace) -> None:
+    """Execute AutoTrader once or in a loop."""
+
+    settings = get_settings()
+    min_conf = args.min_confidence if args.min_confidence is not None else settings.auto_min_confidence
+    risk_fraction = args.risk_fraction if args.risk_fraction is not None else settings.auto_risk_fraction
+    max_positions = args.max_positions if args.max_positions is not None else settings.auto_max_positions
+    account_equity = args.account_equity if args.account_equity is not None else settings.auto_account_equity
+    interval = args.interval if args.interval is not None else settings.auto_interval_seconds
+    include_news = settings.auto_include_news if args.include_news is None else args.include_news
+    use_cache = settings.auto_use_cache if args.use_cache is None else args.use_cache
+    config = AutoTraderConfig(
+        lookback_minutes=args.lookback_minutes,
+        news_hours=args.news_hours,
+        timeframe=args.timeframe,
+        min_confidence=min_conf,
+        trade_risk_fraction=risk_fraction,
+        max_positions=max_positions,
+        account_equity=account_equity,
+        dry_run=not args.live,
+        include_news=include_news,
+        use_cache=use_cache,
+        sleep_seconds=interval,
+    )
+    trader = AutoTrader(
+        settings,
+        pipeline=SignalPipeline(settings),
+        strategy=MomentumIVStrategy(),
+        risk_manager=RiskManager(min_confidence=min_conf),
+        config=config,
+    )
+    if args.loop:
+        trader.run_loop()
+    else:
+        intents = trader.run_once()
+        if not intents:
+            print("No trades met the criteria.")
+        else:
+            print("Generated trade intents:")
+            for intent in intents:
+                print(intent)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="TradingAI command-line tools.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -66,6 +112,31 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--no-cache", action="store_true", help="Bypass local cache when collecting data.")
     collect.add_argument("--skip-news", action="store_true", help="Skip news ingestion when collecting snapshots.")
     collect.set_defaults(func=command_collect_snapshots)
+
+    auto = sub.add_parser("auto-trade", help="Score live signals and (optionally) submit orders.")
+    auto.add_argument("--lookback-minutes", type=int, default=120, help="Lookback window for underlying bars.")
+    auto.add_argument("--news-hours", type=int, default=3, help="News lookback window.")
+    auto.add_argument("--timeframe", type=str, default="1Min", help="Underlying bar timeframe.")
+    auto.add_argument("--min-confidence", type=float, default=None, help="Minimum confidence required to trade.")
+    auto.add_argument("--risk-fraction", type=float, default=None, help="Fraction of equity risked per trade.")
+    auto.add_argument("--max-positions", type=int, default=None, help="Maximum contracts per trade.")
+    auto.add_argument("--account-equity", type=float, default=None, help="Account equity for sizing calculations.")
+    auto.add_argument(
+        "--include-news",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Include news ingestion before scoring signals.",
+    )
+    auto.add_argument(
+        "--use-cache",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Allow cached data for collection.",
+    )
+    auto.add_argument("--loop", action="store_true", help="Continuously run until interrupted.")
+    auto.add_argument("--interval", type=int, default=None, help="Sleep seconds between loops when --loop is set.")
+    auto.add_argument("--live", action="store_true", help="Submit live orders (WARNING: option execution not yet wired).")
+    auto.set_defaults(func=command_auto_trade)
 
     return parser
 
