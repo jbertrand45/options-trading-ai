@@ -36,6 +36,8 @@ class AutoTraderConfig:
     use_cache: bool = False
     sleep_seconds: int = 60
     log_path: Path = Path("data/logs/auto_trader.log")
+    min_option_agg_bars: int = 0
+    min_option_agg_volume: float = 0.0
 
 
 @dataclass
@@ -126,6 +128,18 @@ class AutoTrader:
         if size <= 0:
             return None
         option_symbol = self._option_symbol(context, signal.direction)
+        agg_stats = self._aggregate_health(context, signal.direction)
+        if (
+            agg_stats["bars"] < self.config.min_option_agg_bars
+            or agg_stats["volume"] < self.config.min_option_agg_volume
+        ):
+            logger.debug(
+                "Skipping signal due to insufficient option aggregate data",
+                ticker=context.ticker,
+                bars=agg_stats["bars"],
+                volume=agg_stats["volume"],
+            )
+            return None
         intent = TradeIntent(
             ticker=context.ticker,
             option_symbol=option_symbol,
@@ -133,7 +147,11 @@ class AutoTrader:
             quantity=size,
             entry_price=entry_price,
             confidence=signal.confidence,
-            metadata=signal.metadata or {},
+            metadata={
+                **(signal.metadata or {}),
+                "option_agg_bars": agg_stats["bars"],
+                "option_agg_volume": agg_stats["volume"],
+            },
         )
         return intent
 
@@ -213,6 +231,21 @@ class AutoTrader:
         with self.log_path.open("ab") as log_file:
             log_file.write(payload + b"\n")
         logger.debug("Intent recorded", status=entry["status"], option=intent.option_symbol)
+
+    def _aggregate_health(self, context: StrategyContext, direction: str) -> Dict[str, float]:
+        aggregates = context.option_aggregates or {}
+        series = aggregates.get(direction) or []
+        if not isinstance(series, list):
+            return {"bars": 0, "volume": 0.0}
+        bars = len(series)
+        volume = 0.0
+        for bar in series[-self.config.min_option_agg_bars or len(series) :]:
+            if isinstance(bar, dict):
+                try:
+                    volume += float(bar.get("volume") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+        return {"bars": bars, "volume": volume}
 
 
 def _direction_to_side(direction: str):

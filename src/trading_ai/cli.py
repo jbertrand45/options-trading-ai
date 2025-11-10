@@ -81,6 +81,8 @@ def command_auto_trade(args: argparse.Namespace) -> None:
         include_news=include_news,
         use_cache=use_cache,
         sleep_seconds=interval,
+        min_option_agg_bars=args.min_option_agg_bars or 0,
+        min_option_agg_volume=args.min_option_agg_volume or 0.0,
     )
     trader = AutoTrader(
         settings,
@@ -125,6 +127,8 @@ def build_parser() -> argparse.ArgumentParser:
     auto.add_argument("--risk-fraction", type=float, default=None, help="Fraction of equity risked per trade.")
     auto.add_argument("--max-positions", type=int, default=None, help="Maximum contracts per trade.")
     auto.add_argument("--account-equity", type=float, default=None, help="Account equity for sizing calculations.")
+    auto.add_argument("--min-option-agg-bars", type=int, default=0, help="Minimum number of Polygon option aggregate bars required.")
+    auto.add_argument("--min-option-agg-volume", type=float, default=0.0, help="Minimum summed volume across Polygon option aggregates.")
     auto.add_argument(
         "--include-news",
         action=argparse.BooleanOptionalAction,
