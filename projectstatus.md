@@ -42,3 +42,5 @@
 - `BacktestRunner` skips low-confidence/sub‑$0.30 fills and prefers aggregate closes for exit prices, producing realistic option P&L. Tests cover collector/strategy/backtester behavior with the new data.
 - AutoTrader now enforces tape-health filters before sizing trades. Config/CLI flags (`--min-option-agg-bars`, `--min-option-agg-volume`, `--min-option-agg-vwap`) plus logging ensure we only trade liquid contracts with constructive VWAP drift. The helper script and scheduling docs were updated so cron/launchd jobs pass these thresholds automatically.
 - `.env.example` includes the new knobs; run snapshot + auto-trader loops with the suggested defaults (20 bars, 50 contracts of volume, ≥2% VWAP trend) for best results.
+
+**Next step:** Add dashboards/monitoring (Grafana/Streamlit) reading DuckDB aggregates so we can visualize option VWAP trends, auto-trader intents, and risk metrics in near real-time before moving to live capital.
