@@ -57,8 +57,8 @@ def test_auto_trader_builds_intent_from_snapshot(monkeypatch, tmp_path):
                 "PUT": {"bid": 0.9, "ask": 1.0, "symbol": "AAPL240118P00100000"},
             },
             "option_aggregates": {
-                "CALL": [{"close": 1.1, "volume": 5}] * 20,
-                "PUT": [{"close": 0.9, "volume": 3}] * 20,
+                "CALL": [{"close": 1.1, "volume": 5, "vwap": 1.1 + i * 0.01} for i in range(20)],
+                "PUT": [{"close": 0.9, "volume": 3, "vwap": 0.9 - i * 0.01} for i in range(20)],
             },
             "news": [],
             "features": {"momentum_15": 0.02},
@@ -100,7 +100,7 @@ def test_auto_trader_calls_live_path(monkeypatch, tmp_path):
                 "CALL": {"bid": 1.0, "ask": 1.2, "symbol": "CHAIN"},
             },
             "option_aggregates": {
-                "CALL": [{"close": 1.1, "volume": 5}] * 15,
+                "CALL": [{"close": 1.1, "volume": 5, "vwap": 1.0 + i * 0.02} for i in range(15)],
             },
             "news": [],
             "features": {"momentum_15": 0.02},
@@ -141,7 +141,7 @@ def test_auto_trader_respects_option_aggregate_threshold(monkeypatch, tmp_path):
                 "CALL": {"bid": 1.0, "ask": 1.2, "symbol": "CHAIN"},
             },
             "option_aggregates": {
-                "CALL": [{"close": 1.1, "volume": 1}] * 2,
+                "CALL": [{"close": 1.1, "volume": 1, "vwap": 1.0}] * 2,
             },
             "news": [],
             "features": {"momentum_15": 0.02},
@@ -160,6 +160,47 @@ def test_auto_trader_respects_option_aggregate_threshold(monkeypatch, tmp_path):
             log_path=tmp_path / "auto.log",
             min_option_agg_bars=5,
             min_option_agg_volume=10.0,
+            min_option_agg_vwap=0.0,
+        ),
+    )
+
+    intents = trader.run_once()
+
+    assert len(intents) == 0
+
+
+def test_auto_trader_respects_option_agg_vwap(monkeypatch, tmp_path):
+    settings = build_settings(monkeypatch)
+    snapshot = {
+        "AAPL": {
+            "underlying_bars": [
+                {"timestamp": 1, "close": 100.0},
+                {"timestamp": 2, "close": 101.0},
+            ],
+            "option_chain": {},
+            "option_metrics": {},
+            "option_quote": {
+                "CALL": {"bid": 1.0, "ask": 1.2, "symbol": "CHAIN"},
+            },
+            "option_aggregates": {
+                "CALL": [{"close": 1.1, "volume": 5, "vwap": 1.0}] * 10,
+            },
+            "news": [],
+            "features": {"momentum_15": 0.02},
+        }
+    }
+    pipeline = DummyPipeline(snapshot)
+    trader = AutoTrader(
+        settings,
+        pipeline=pipeline,
+        strategy=MomentumIVStrategy(),
+        alpaca_client=DummyAlpaca(),  # type: ignore[arg-type]
+        config=AutoTraderConfig(
+            min_confidence=0.3,
+            dry_run=True,
+            account_equity=1000.0,
+            log_path=tmp_path / "auto.log",
+            min_option_agg_vwap=0.05,
         ),
     )
 

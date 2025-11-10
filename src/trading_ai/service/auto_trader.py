@@ -38,6 +38,7 @@ class AutoTraderConfig:
     log_path: Path = Path("data/logs/auto_trader.log")
     min_option_agg_bars: int = 0
     min_option_agg_volume: float = 0.0
+    min_option_agg_vwap: float = 0.0
 
 
 @dataclass
@@ -129,15 +130,18 @@ class AutoTrader:
             return None
         option_symbol = self._option_symbol(context, signal.direction)
         agg_stats = self._aggregate_health(context, signal.direction)
+        agg_vwap = self._aggregate_vwap_trend(context, signal.direction)
         if (
             agg_stats["bars"] < self.config.min_option_agg_bars
             or agg_stats["volume"] < self.config.min_option_agg_volume
+            or abs(agg_vwap) < self.config.min_option_agg_vwap
         ):
             logger.debug(
                 "Skipping signal due to insufficient option aggregate data",
                 ticker=context.ticker,
                 bars=agg_stats["bars"],
                 volume=agg_stats["volume"],
+                vwap=agg_vwap,
             )
             return None
         intent = TradeIntent(
@@ -151,6 +155,7 @@ class AutoTrader:
                 **(signal.metadata or {}),
                 "option_agg_bars": agg_stats["bars"],
                 "option_agg_volume": agg_stats["volume"],
+                "option_agg_vwap": agg_vwap,
             },
         )
         return intent
@@ -246,6 +251,23 @@ class AutoTrader:
                 except (TypeError, ValueError):
                     continue
         return {"bars": bars, "volume": volume}
+
+    def _aggregate_vwap_trend(self, context: StrategyContext, direction: str) -> float:
+        aggregates = context.option_aggregates or {}
+        series = aggregates.get(direction) or []
+        if not isinstance(series, list) or len(series) < 2:
+            return 0.0
+        vwaps = [bar.get("vwap") for bar in series if isinstance(bar, dict) and bar.get("vwap") is not None]
+        if len(vwaps) < 2:
+            return 0.0
+        try:
+            start = float(vwaps[0])
+            end = float(vwaps[-1])
+        except (TypeError, ValueError):
+            return 0.0
+        if start == 0:
+            return 0.0
+        return (end - start) / start
 
 
 def _direction_to_side(direction: str):
