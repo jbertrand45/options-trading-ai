@@ -1,6 +1,7 @@
 """Backtest-specific tests."""
 
 import pandas as pd
+import pytest
 
 from trading_ai.backtest.engine import BacktestRunner
 from trading_ai.strategies.base import StrategyContext, TradingSignal, TradingStrategy
@@ -61,13 +62,14 @@ def test_backtest_runner_exit_prices_reflect_underlying_move() -> None:
         },
         news_items=[],
         features={},
+        option_aggregates={"CALL": [{"close": 2.5}, {"close": 3.0}], "PUT": []},
     )
     runner = BacktestRunner(strategy=AlwaysCallStrategy())
 
     result = runner.run([context])
 
     trade = result.trades[0]
-    assert trade.exit_price > trade.entry_price
+    assert trade.exit_price == pytest.approx(3.0)
 
 
 def test_backtest_runner_puts_gain_when_underlying_falls() -> None:

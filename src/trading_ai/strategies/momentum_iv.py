@@ -25,6 +25,8 @@ class MomentumIVConfig:
     iv_weight: float = 0.25
     news_weight: float = 0.2
     option_flow_weight: float = 0.15
+    option_agg_weight: float = 0.2
+    option_agg_lookback: int = 15  # minutes
 
 
 class MomentumIVStrategy(TradingStrategy):
@@ -91,6 +93,35 @@ class MomentumIVStrategy(TradingStrategy):
             return bid
         return (bid + ask) / 2
 
+    def _momentum_from_option_aggregates(self, option_aggregates: Optional[Dict[str, Any]]) -> float:
+        if not isinstance(option_aggregates, dict):
+            return 0.0
+        call_series = option_aggregates.get("CALL") or []
+        put_series = option_aggregates.get("PUT") or []
+        call_mom = self._aggregate_pct_change(call_series)
+        put_mom = self._aggregate_pct_change(put_series)
+        if call_mom == 0.0 and put_mom == 0.0:
+            return 0.0
+        return call_mom - put_mom
+
+    def _aggregate_pct_change(self, series: list[Dict[str, Any]]) -> float:
+        if not series:
+            return 0.0
+        closes = [bar.get("close") for bar in series if isinstance(bar, dict) and bar.get("close") is not None]
+        if len(closes) < 2:
+            return 0.0
+        window = closes[-self.config.option_agg_lookback :]
+        if len(window) < 2:
+            return 0.0
+        try:
+            start = float(window[0])
+            end = float(window[-1])
+        except (TypeError, ValueError):
+            return 0.0
+        if start == 0:
+            return 0.0
+        return (end - start) / start
+
     def _extract_iv_metrics(self, option_chain: Dict, option_metrics: Dict[str, Any] | None = None) -> Dict[str, float]:
         if not option_chain:
             return {"avg_iv": np.nan, "iv_change": np.nan}
@@ -134,15 +165,24 @@ class MomentumIVStrategy(TradingStrategy):
             return "CALL" if flow_bias > 0 else "PUT"
         return "NONE"
 
-    def _confidence_score(self, momentum: float, iv_change: float, news_bias: float, flow_bias: float) -> float:
+    def _confidence_score(
+        self,
+        momentum: float,
+        iv_change: float,
+        news_bias: float,
+        flow_bias: float,
+        agg_momentum: float,
+    ) -> float:
         momentum_score = min(abs(momentum) / (self.config.momentum_threshold * 2), 1.0)
         iv_score = 0.0 if np.isnan(iv_change) else min(abs(iv_change) / 0.1, 1.0)
         flow_score = min(abs(flow_bias), 1.0)
+        agg_score = min(abs(agg_momentum) / max(self.config.momentum_threshold, 1e-6), 1.0)
         weights = (
             self.config.momentum_weight,
             self.config.iv_weight,
             self.config.news_weight,
             self.config.option_flow_weight,
+            self.config.option_agg_weight,
         )
         total_weight = sum(weights) or 1.0
         raw = (
@@ -150,6 +190,7 @@ class MomentumIVStrategy(TradingStrategy):
             + weights[1] * iv_score
             + weights[2] * news_bias
             + weights[3] * flow_score
+            + weights[4] * agg_score
         ) / total_weight
         baseline = self.config.baseline_confidence / self.config.max_confidence
         raw = max(baseline, raw)
@@ -271,6 +312,9 @@ class MomentumIVStrategy(TradingStrategy):
             quote_momentum = self._momentum_from_quotes(context.option_quote)
             if abs(quote_momentum) > abs(momentum):
                 momentum = quote_momentum
+        agg_momentum = self._momentum_from_option_aggregates(context.option_aggregates)
+        if abs(agg_momentum) > abs(momentum):
+            momentum = np.sign(agg_momentum) * max(abs(momentum), abs(agg_momentum))
         iv_metrics = self._extract_iv_metrics(context.option_chain, context.option_metrics)
         iv_change = iv_metrics["iv_change"]
         flow_metrics = self._option_flow_metrics(context.option_metrics, context.option_chain)
@@ -279,7 +323,7 @@ class MomentumIVStrategy(TradingStrategy):
             flow_bias = flow_metrics["delta_bias"]
         direction = self._determine_direction(momentum, iv_change, flow_bias)
         news_bias = self._news_bias(context.news_items)
-        confidence = self._confidence_score(momentum, iv_change, news_bias, flow_bias)
+        confidence = self._confidence_score(momentum, iv_change, news_bias, flow_bias, agg_momentum)
 
         signal = TradingSignal(
             ticker=context.ticker,
@@ -292,6 +336,7 @@ class MomentumIVStrategy(TradingStrategy):
                 "news_bias": news_bias,
                 "flow_ratio": flow_metrics["flow_ratio"],
                 "delta_bias": flow_metrics["delta_bias"],
+                "option_agg_momentum": agg_momentum,
             },
         )
         return signal

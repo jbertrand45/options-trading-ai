@@ -38,7 +38,7 @@ class PolygonClient(BaseClient):
 
         try:
             response = self._client.get_aggs(
-                symbol=symbol,
+                ticker=symbol,
                 multiplier=multiplier,
                 timespan=timespan,
                 from_=start,
@@ -48,8 +48,16 @@ class PolygonClient(BaseClient):
         except Exception as exc:  # pragma: no cover - network failure path
             logger.exception("Failed to fetch Polygon aggregates", symbol=symbol)
             raise APIClientError(f"Polygon aggregate error: {exc}") from exc
-        self._log("Fetched Polygon aggregates", symbol=symbol, count=len(response))
-        return response
+        payload = []
+        for agg in response:
+            if hasattr(agg, "model_dump"):
+                payload.append(agg.model_dump())
+            elif hasattr(agg, "__dict__"):
+                payload.append(agg.__dict__)
+            else:
+                payload.append(agg)
+        self._log("Fetched Polygon aggregates", symbol=symbol, count=len(payload))
+        return payload
 
     def fetch_reference_news(
         self,

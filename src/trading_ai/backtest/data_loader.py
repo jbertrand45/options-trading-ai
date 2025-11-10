@@ -32,6 +32,7 @@ def contexts_from_snapshot(snapshot: Dict[str, Dict]) -> List[StrategyContext]:
         option_quote = data.get("option_quote") or {}
         news = data.get("news") or []
         features = data.get("features") or {}
+        option_aggs = data.get("option_aggregates") or {}
 
         context = StrategyContext(
             ticker=ticker,
@@ -41,6 +42,7 @@ def contexts_from_snapshot(snapshot: Dict[str, Dict]) -> List[StrategyContext]:
             option_quote=option_quote,
             news_items=news,
             features=features,
+            option_aggregates=option_aggs,
         )
         contexts.append(context)
     return contexts

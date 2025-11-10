@@ -32,6 +32,7 @@ class StrategyContext:
     option_quote: Any
     news_items: list[Dict[str, Any]]
     features: Dict[str, Any] | None = None
+    option_aggregates: Dict[str, Any] | None = None
 
 
 class TradingStrategy:

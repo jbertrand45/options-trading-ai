@@ -99,3 +99,28 @@ def test_momentum_iv_strategy_falls_back_to_option_chain_for_flow() -> None:
 
     assert signal.direction == "CALL"
     assert signal.metadata["flow_ratio"] > 0
+
+
+def test_momentum_iv_strategy_uses_option_aggregates() -> None:
+    strategy = MomentumIVStrategy()
+    context = StrategyContext(
+        ticker="AAPL",
+        underlying_bars=pd.DataFrame(),
+        option_chain={},
+        option_metrics={},
+        option_quote={
+            "CALL": {"bid": 2.0, "ask": 2.2, "symbol": "AAPL251114C00270000"},
+            "PUT": {"bid": 1.0, "ask": 1.1, "symbol": "AAPL251114P00270000"},
+        },
+        news_items=[],
+        features={},
+        option_aggregates={
+            "CALL": [{"close": 1.0}, {"close": 1.4}],
+            "PUT": [{"close": 1.0}, {"close": 0.6}],
+        },
+    )
+
+    signal = strategy.generate_signal(context)
+
+    assert signal.direction == "CALL"
+    assert signal.metadata["option_agg_momentum"] > 0

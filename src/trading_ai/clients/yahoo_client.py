@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List
 
 import feedparser
@@ -28,7 +28,7 @@ class YahooNewsClient(BaseClient):
         entries = []
         for entry in parsed.entries[:limit]:
             published = entry.get("published_parsed")
-            published_dt = datetime(*published[:6]) if published else None
+            published_dt = datetime(*published[:6], tzinfo=timezone.utc) if published else None
             if since and published_dt and published_dt < since:
                 continue
             entries.append(

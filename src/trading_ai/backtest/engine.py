@@ -17,6 +17,8 @@ class BacktestConfig:
     risk_fraction: float = 0.02
     commission_per_contract: float = 0.65
     max_positions: int = 1
+    min_confidence: float = 0.5
+    min_contract_price: float = 0.3
 
 
 @dataclass
@@ -56,9 +58,12 @@ class BacktestRunner:
             if signal.direction == "NONE" or signal.confidence <= 0:
                 equity_points.append(equity)
                 continue
+            if signal.confidence < self.config.min_confidence:
+                equity_points.append(equity)
+                continue
 
             entry_price = self._infer_entry_price(signal, context)
-            if entry_price is None:
+            if entry_price is None or entry_price < self.config.min_contract_price:
                 equity_points.append(equity)
                 continue
 
@@ -125,6 +130,10 @@ class BacktestRunner:
         if signal.target_price:
             return signal.target_price
 
+        agg_exit = self._option_aggregate_exit(signal, context, entry_price)
+        if agg_exit is not None:
+            return agg_exit
+
         underlying_return = self._underlying_return(context)
         if underlying_return is not None:
             direction = 1 if signal.direction == "CALL" else -1
@@ -163,6 +172,20 @@ class BacktestRunner:
             if signal.direction == "PUT":
                 return -0.4
             return 0.3
+
+    def _option_aggregate_exit(self, signal: TradingSignal, context: StrategyContext, entry_price: float) -> Optional[float]:
+        aggs = context.option_aggregates or {}
+        leg_series = aggs.get(signal.direction)
+        if not isinstance(leg_series, list) or not leg_series:
+            return None
+        closes = [bar.get("close") for bar in leg_series if isinstance(bar, dict) and bar.get("close") is not None]
+        if not closes:
+            return None
+        try:
+            exit_price = float(closes[-1])
+        except (TypeError, ValueError):
+            return None
+        return max(exit_price, 0.01)
 
     def _max_drawdown(self, equity: pd.Series) -> float:
         running_max = equity.cummax()

@@ -49,7 +49,11 @@ def command_collect_snapshots(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     path = output_dir / f"snapshots_{timestamp}.json"
-    payload = orjson.dumps(_to_serializable(snapshot), option=orjson.OPT_INDENT_2)
+    payload = orjson.dumps(
+        _to_serializable(snapshot),
+        option=orjson.OPT_INDENT_2,
+        default=str,
+    )
     path.write_bytes(payload)
     print(f"Snapshot saved to {path}")
 

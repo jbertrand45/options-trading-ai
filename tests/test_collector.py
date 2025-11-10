@@ -56,6 +56,7 @@ class DummyPolygon:
         self.calls = 0
         self.bar_calls = 0
         self.contract_calls = 0
+        self.agg_calls = 0
 
     def fetch_reference_news(self, **_: Any) -> Iterable[Dict[str, Any]]:
         self.calls += 1
@@ -84,6 +85,19 @@ class DummyPolygon:
                 "open_interest": 80,
                 "greeks": {"delta": -0.5, "gamma": 0.1},
             },
+        ]
+
+    def fetch_option_aggregates(self, *args: Any, **kwargs: Any) -> Iterable[Dict[str, Any]]:
+        self.agg_calls += 1
+        return [
+            {
+                "timestamp": 1,
+                "open": 1.0,
+                "high": 1.2,
+                "low": 0.9,
+                "close": 1.1,
+                "volume": 250,
+            }
         ]
 
 
@@ -246,3 +260,29 @@ def test_market_data_collector_collects_option_metrics(tmp_path, monkeypatch: py
     metrics = result["AAPL"]["option_metrics"]
     assert "AAPL251107C00100000" in metrics
     assert metrics["AAPL251107C00100000"]["implied_volatility"] == pytest.approx(0.25)
+
+
+def test_market_data_collector_fetches_option_aggregates(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = build_settings(monkeypatch)
+    cache = LocalDataCache(root=tmp_path / "cache")
+    polygon = DummyPolygon()
+    collector = MarketDataCollector(
+        settings,
+        cache=cache,
+        alpaca_client=DummyAlpaca(),  # type: ignore[arg-type]
+        polygon_client=polygon,  # type: ignore[arg-type]
+        aggregator=DummyAggregator(),  # type: ignore[arg-type]
+    )
+
+    result = collector.collect_market_snapshot(
+        tickers=["AAPL"],
+        lookback=timedelta(hours=1),
+        news_lookback=timedelta(hours=1),
+        timeframe="1Min",
+        use_cache=False,
+    )
+
+    aggs = result["AAPL"]["option_aggregates"]
+    assert "CALL" in aggs
+    assert aggs["CALL"][0]["close"] == pytest.approx(1.1)
+    assert polygon.agg_calls >= 1

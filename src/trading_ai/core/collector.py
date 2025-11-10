@@ -125,8 +125,14 @@ class MarketDataCollector:
                         timeframe=_polygon_timespan(timeframe),
                     )
                 )
-            except APIClientError:
-                logger.warning("Polygon equity bars unavailable; falling back to Alpaca", ticker=ticker)
+            except APIClientError as exc:
+                logger.warning(
+                    "Polygon equity bars unavailable; falling back to Alpaca",
+                    ticker=ticker,
+                    error=str(exc),
+                )
+                # Avoid hammering Polygon with repeated unauthorized requests in the same run.
+                self.use_polygon_bars = False
 
         if frame.empty:
             try:
@@ -231,6 +237,56 @@ class MarketDataCollector:
             cache_key = ("alpaca", "option-quote", ticker)
             self.cache.write_json(quotes, *cache_key)
         return quotes
+
+    def collect_option_aggregates(
+        self,
+        *,
+        option_quote: Dict[str, Any],
+        start: datetime,
+        end: datetime,
+        timeframe: str = "1Min",
+        use_cache: bool = True,
+    ) -> Dict[str, Any]:
+        """Fetch Polygon option aggregates for the representative call/put selections."""
+
+        aggregates: Dict[str, Any] = {}
+        now_bucket = end.strftime("%Y%m%d_%H%M%S")
+        for leg, quote in option_quote.items():
+            if not isinstance(quote, dict):
+                continue
+            symbol = quote.get("symbol")
+            if not symbol:
+                continue
+            if not symbol.startswith("O:"):
+                symbol = f"O:{symbol}"
+            cache_key = ("polygon", "option-aggs", symbol, timeframe, now_bucket)
+            if use_cache and self.cache.exists(*cache_key, suffix=".json"):
+                aggregates[leg] = self.cache.read_json(*cache_key)
+                continue
+            try:
+                payload = list(
+                    self.polygon.fetch_option_aggregates(
+                        symbol=symbol,
+                        multiplier=1,
+                        timespan=_polygon_timespan(timeframe),
+                        start=start,
+                        end=end,
+                        limit=5000,
+                    )
+                )
+            except APIClientError as exc:
+                logger.warning(
+                    "Polygon option aggregates unavailable",
+                    symbol=symbol,
+                    error=str(exc),
+                )
+                continue
+            serialized = self._serialize_payload(payload)
+            if serialized:
+                aggregates[leg] = serialized
+                if use_cache:
+                    self.cache.write_json(serialized, *cache_key)
+        return aggregates
 
     def collect_news(
         self,
@@ -358,6 +414,15 @@ class MarketDataCollector:
                 option_chain=option_chain,
                 bars=bars,
             )
+            option_aggs: Dict[str, Any] = {}
+            if option_quote:
+                option_aggs = self.collect_option_aggregates(
+                    option_quote=option_quote,
+                    start=bar_start,
+                    end=now,
+                    timeframe=timeframe,
+                    use_cache=use_cache,
+                )
             news_items: List[Dict[str, Any]] = []
             if include_news:
                 news_items = self.collect_news(ticker, since=news_since, use_cache=use_cache)
@@ -368,6 +433,7 @@ class MarketDataCollector:
                 "option_chain": option_chain,
                 "option_metrics": option_metrics,
                 "option_quote": option_quote,
+                "option_aggregates": option_aggs,
                 "news": news_items,
             }
         return snapshot
