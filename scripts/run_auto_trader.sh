@@ -26,5 +26,17 @@ if [[ "${AUTO_LIVE:-0}" == "1" ]]; then
   ARGS+=(--live)
 fi
 
+if [[ -n "${MIN_OPTION_AGG_BARS:-}" ]]; then
+  ARGS+=(--min-option-agg-bars "${MIN_OPTION_AGG_BARS}")
+fi
+
+if [[ -n "${MIN_OPTION_AGG_VOLUME:-}" ]]; then
+  ARGS+=(--min-option-agg-volume "${MIN_OPTION_AGG_VOLUME}")
+fi
+
+if [[ -n "${MIN_OPTION_AGG_VWAP:-}" ]]; then
+  ARGS+=(--min-option-agg-vwap "${MIN_OPTION_AGG_VWAP}")
+fi
+
 python3.11 -m poetry run python -m trading_ai auto-trade "${ARGS[@]}" \
   >> "${AUTO_TRADER_LOG:-data/logs/auto_trader_service.log}" 2>&1
