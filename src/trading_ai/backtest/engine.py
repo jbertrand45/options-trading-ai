@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
+import numpy as np
 import pandas as pd
 
 from trading_ai.risk.manager import PositionSizingInput, RiskManager
@@ -19,6 +20,16 @@ class BacktestConfig:
     max_positions: int = 1
     min_confidence: float = 0.5
     min_contract_price: float = 0.3
+    base_take_profit_pct: float = 0.5
+    base_stop_loss_pct: float = 0.35
+    min_reward_pct: float = 0.15
+    min_stop_pct: float = 0.15
+    volatility_target_weight: float = 1.2
+    volatility_stop_weight: float = 0.8
+    range_target_weight: float = 0.6
+    agg_exit_weight: float = 0.5
+    option_exit_lookback: int = 12
+    floor_price_pct: float = 0.05
 
 
 @dataclass
@@ -67,6 +78,8 @@ class BacktestRunner:
                 equity_points.append(equity)
                 continue
 
+            spread = self._quote_spread(context, signal.direction)
+            available_volume = self._aggregate_volume(context, signal.direction)
             size = self.risk_manager.size_position(
                 PositionSizingInput(
                     account_equity=equity,
@@ -74,6 +87,8 @@ class BacktestRunner:
                     contract_price=entry_price,
                     confidence=signal.confidence,
                     max_positions=self.config.max_positions,
+                    spread=spread,
+                    available_volume=available_volume,
                 )
             )
             if size == 0:
@@ -134,44 +149,32 @@ class BacktestRunner:
         if agg_exit is not None:
             return agg_exit
 
-        underlying_return = self._underlying_return(context)
-        if underlying_return is not None:
-            direction = 1 if signal.direction == "CALL" else -1
-            delta_hint = self._signal_delta_hint(signal)
-            leverage = max(1.5, min(8.0, abs(delta_hint) * 12))
-            option_return = direction * underlying_return * leverage
-            projected = entry_price * (1 + option_return)
-            floor_price = entry_price * 0.1
-            return max(floor_price, projected)
+        option_vol = self._option_volatility(context, signal.direction)
+        option_range = self._option_range_pct(context, signal.direction)
+        metadata_bias = self._metadata_exit_bias(signal)
+        confidence = max(self.config.min_confidence, signal.confidence)
+        target_pct = (
+            self.config.base_take_profit_pct * confidence
+            + option_range * self.config.range_target_weight
+            + max(0.0, metadata_bias)
+        )
+        stop_pct = (
+            self.config.base_stop_loss_pct / max(confidence, 0.5)
+            + option_vol * self.config.volatility_stop_weight
+            + max(0.0, -metadata_bias)
+        )
+        target_pct = max(self.config.min_reward_pct, target_pct)
+        stop_pct = max(self.config.min_stop_pct, stop_pct)
 
-        direction = 1 if signal.direction == "CALL" else -1
-        return entry_price * (1 + direction * 0.2 * signal.confidence)
+        upper = entry_price * (1 + target_pct)
+        lower = entry_price * (1 - stop_pct)
+        floor_price = entry_price * self.config.floor_price_pct
+        lower = max(lower, floor_price)
 
-    def _underlying_return(self, context: StrategyContext) -> Optional[float]:
-        bars = context.underlying_bars
-        if not isinstance(bars, pd.DataFrame) or bars.empty or "close" not in bars:
-            return None
-        try:
-            close = bars["close"].astype(float)
-            start = float(close.iloc[0])
-            end = float(close.iloc[-1])
-        except (TypeError, ValueError, IndexError):
-            return None
-        if start <= 0:
-            return None
-        return (end - start) / start
+        projected_exit = entry_price * (1 + metadata_bias)
+        projected_exit = max(lower, min(upper, projected_exit))
+        return max(projected_exit, 0.01)
 
-    def _signal_delta_hint(self, signal: TradingSignal) -> float:
-        metadata = signal.metadata or {}
-        delta = metadata.get("delta") or metadata.get("delta_bias")
-        try:
-            return float(delta)
-        except (TypeError, ValueError):
-            if signal.direction == "CALL":
-                return 0.5
-            if signal.direction == "PUT":
-                return -0.4
-            return 0.3
 
     def _option_aggregate_exit(self, signal: TradingSignal, context: StrategyContext, entry_price: float) -> Optional[float]:
         aggs = context.option_aggregates or {}
@@ -186,6 +189,92 @@ class BacktestRunner:
         except (TypeError, ValueError):
             return None
         return max(exit_price, 0.01)
+
+    def _option_volatility(self, context: StrategyContext, direction: str) -> float:
+        aggs = context.option_aggregates or {}
+        series = aggs.get(direction) or []
+        if not isinstance(series, list):
+            return 0.0
+        closes = [
+            self._safe_float(bar.get("close"))
+            for bar in series[-self.config.option_exit_lookback :]
+            if isinstance(bar, dict) and bar.get("close") is not None
+        ]
+        if len(closes) < 2:
+            return 0.0
+        closes_arr = np.asarray(closes, dtype=float)
+        prev = closes_arr[:-1]
+        diff = np.diff(closes_arr)
+        valid = prev != 0
+        if not valid.any():
+            return 0.0
+        returns = diff[valid] / prev[valid]
+        if returns.size == 0:
+            return 0.0
+        return float(np.std(returns))
+
+    def _option_range_pct(self, context: StrategyContext, direction: str) -> float:
+        aggs = context.option_aggregates or {}
+        series = aggs.get(direction) or []
+        if not isinstance(series, list):
+            return 0.0
+        closes = [
+            self._safe_float(bar.get("close"))
+            for bar in series[-self.config.option_exit_lookback :]
+            if isinstance(bar, dict) and bar.get("close") is not None
+        ]
+        if len(closes) < 2:
+            return 0.0
+        latest = closes[-1]
+        if latest <= 0:
+            return 0.0
+        return float((max(closes) - min(closes)) / latest)
+
+    def _quote_spread(self, context: StrategyContext, direction: str) -> float:
+        quote = context.option_quote
+        if isinstance(quote, dict):
+            leg = quote.get(direction) or quote.get(direction.capitalize())
+            if isinstance(leg, dict):
+                bid = leg.get("bid") or leg.get("bid_price")
+                ask = leg.get("ask") or leg.get("ask_price")
+                try:
+                    bid_f = float(bid) if bid is not None else None
+                    ask_f = float(ask) if ask is not None else None
+                except (TypeError, ValueError):
+                    return 0.0
+                if bid_f is None or ask_f is None:
+                    return 0.0
+                return max(0.0, ask_f - bid_f)
+        return 0.0
+
+    def _aggregate_volume(self, context: StrategyContext, direction: str) -> float:
+        aggs = context.option_aggregates or {}
+        series = aggs.get(direction) or []
+        if not isinstance(series, list):
+            return 0.0
+        volume = 0.0
+        for bar in series[-self.config.option_exit_lookback :]:
+            if isinstance(bar, dict):
+                try:
+                    volume += float(bar.get("volume") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+        return volume
+
+    def _metadata_exit_bias(self, signal: TradingSignal) -> float:
+        metadata = signal.metadata or {}
+        agg_momentum = self._safe_float(metadata.get("option_agg_momentum"))
+        agg_vwap = self._safe_float(metadata.get("option_agg_vwap"))
+        vega_bias = self._safe_float(metadata.get("vega_bias"))
+        theta_bias = self._safe_float(metadata.get("theta_bias"))
+        bias = agg_momentum + agg_vwap + 0.5 * vega_bias - 0.25 * abs(theta_bias)
+        return bias * self.config.agg_exit_weight
+
+    def _safe_float(self, value: Any) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
 
     def _max_drawdown(self, equity: pd.Series) -> float:
         running_max = equity.cummax()

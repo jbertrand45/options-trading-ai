@@ -6,8 +6,8 @@ Prototype workspace for an options-trading signal generator powered by Python.
 1. Install [Poetry](https://python-poetry.org/docs/#installation) if it is not already available.
 2. Run `poetry install` to create the isolated virtual environment and install dependencies.
 3. Copy `.env.example` to `.env` and populate Alpaca, Polygon, and news API credentials (`NEWS_API_KEY/SECRET`, `ALPHA_VANTAGE_API_KEY`, `MARKETAUX_API_KEY` as available).
-   - Set `ALPACA_DATA_FEED=SIP` if your account has SIP entitlements; the default `IEX` feed only returns bars during regular trading hours.
-   - If you have Polygon/“Massive” intraday access, set `USE_POLYGON_BARS=1`, `POLYGON_BASE_URL=https://api.massive.com`, `POLYGON_API_OVERRIDE_IP=<known_ip_if_dns_is_flaky>`, and optionally tighten `OPTION_METRICS_LIMIT` to control how many option contracts we pull per ticker (default 300).
+   - Set `ALPACA_DATA_FEED=SIP` if your account has SIP entitlements; the default `IEX` feed only returns bars during regular trading hours. If DNS to `data.alpaca.markets` is flaky on this host, set `ALPACA_DATA_OVERRIDE_IP=<known_ip>` to pin the resolver. Corporate proxies with custom CAs can be handled by pointing `ALPACA_CA_BUNDLE=/path/to/cacert.pem` or, as a last resort for debugging only, disabling verification via `ALPACA_VERIFY_TLS=0`.
+   - If you have Polygon/“Massive” intraday access, set `USE_POLYGON_BARS=1`, `POLYGON_BASE_URL=https://api.massive.com`, `POLYGON_API_OVERRIDE_IP=<known_ip_if_dns_is_flaky>`, and optionally tighten `OPTION_METRICS_LIMIT` to control how many option contracts we pull per ticker (default 300). If your Polygon plan lacks option aggregates, set `ENABLE_OPTION_AGGREGATES=0` to skip those calls and rely on Alpaca quotes.
 4. Review `projectdescription.md` and `docs/strategy_plan.md` for the roadmap and algorithm blueprint (default watchlist: AAPL, MSFT, AMZN, GOOG, NVDA, META, TSLA, PLTR, OPEN, AMD, HOOD).
 
 ```bash
@@ -32,7 +32,25 @@ AUTO_ACCOUNT_EQUITY=150
 AUTO_INTERVAL_SECONDS=60
 AUTO_INCLUDE_NEWS=0
 AUTO_USE_CACHE=0
+AUTO_USE_SNAPSHOT_STREAM=1
+AUTO_STREAM_INTERVAL_SECONDS=60
+AUTO_STREAM_FORCE_REFRESH=0
+MIN_OPTION_AGG_BARS=20
+MIN_OPTION_AGG_VOLUME=50
+MIN_OPTION_AGG_VWAP=0.02
+MAX_OPTION_SPREAD_PCT=0.35
+MIN_OPTION_LIQUIDITY=25
+ENABLE_OPTION_AGGREGATES=1
+ENABLE_UNDERLYING_BARS=1
+ALPACA_CA_BUNDLE=
+ALPACA_VERIFY_TLS=1
 ```
+
+These `MIN_OPTION_AGG_*` thresholds act as your default tape-health gate for AutoTrader; tweak them once in `.env` and every `auto-trade` invocation will inherit the filters unless you override them with CLI flags.
+
+Set `ENABLE_UNDERLYING_BARS=0` if you want to run purely on option data (Massive/Polygon) without requesting Alpaca equity bars—useful when your data plan is delayed or you only want option-tape signals.
+
+Use `MAX_OPTION_SPREAD_PCT` and `MIN_OPTION_LIQUIDITY` to define the default spread/liquidity gates for the risk manager; trades are skipped whenever the bid/ask is too wide or the recent option tape is too thin.
 
 ## Architecture Snapshot
 - `trading_ai.core`: orchestrates data collection via `MarketDataCollector` and `SignalPipeline`.

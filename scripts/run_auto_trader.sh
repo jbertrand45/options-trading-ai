@@ -22,6 +22,18 @@ if [[ "${AUTO_USE_CACHE:-0}" == "1" ]]; then
   ARGS+=(--use-cache)
 fi
 
+if [[ "${AUTO_USE_SNAPSHOT_STREAM:-0}" == "1" ]]; then
+  ARGS+=(--use-snapshot-stream)
+fi
+
+if [[ "${AUTO_STREAM_FORCE_REFRESH:-0}" == "1" ]]; then
+  ARGS+=(--stream-force-refresh)
+fi
+
+if [[ -n "${AUTO_STREAM_INTERVAL_SECONDS:-}" ]]; then
+  ARGS+=(--stream-interval "${AUTO_STREAM_INTERVAL_SECONDS}")
+fi
+
 if [[ "${AUTO_LIVE:-0}" == "1" ]]; then
   ARGS+=(--live)
 fi
@@ -36,6 +48,14 @@ fi
 
 if [[ -n "${MIN_OPTION_AGG_VWAP:-}" ]]; then
   ARGS+=(--min-option-agg-vwap "${MIN_OPTION_AGG_VWAP}")
+fi
+
+if [[ -n "${MAX_OPTION_SPREAD_PCT:-}" ]]; then
+  ARGS+=(--max-option-spread-pct "${MAX_OPTION_SPREAD_PCT}")
+fi
+
+if [[ -n "${MIN_OPTION_LIQUIDITY:-}" ]]; then
+  ARGS+=(--min-option-liquidity "${MIN_OPTION_LIQUIDITY}")
 fi
 
 python3.11 -m poetry run python -m trading_ai auto-trade "${ARGS[@]}" \

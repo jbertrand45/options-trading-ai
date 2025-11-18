@@ -19,13 +19,15 @@ def load_snapshot_file(path: str | Path) -> Dict[str, Dict]:
 def contexts_from_snapshot(snapshot: Dict[str, Dict]) -> List[StrategyContext]:
     contexts: List[StrategyContext] = []
     for ticker, data in snapshot.items():
-        bars = data.get("underlying_bars") or []
+        bars = data.get("underlying_bars")
         if isinstance(bars, list):
             bars_df = pd.DataFrame(bars)
         elif isinstance(bars, pd.DataFrame):
             bars_df = bars
-        else:
+        elif bars is None:
             bars_df = pd.DataFrame()
+        else:
+            bars_df = pd.DataFrame(bars)
 
         option_chain = data.get("option_chain")
         option_metrics = data.get("option_metrics") or {}

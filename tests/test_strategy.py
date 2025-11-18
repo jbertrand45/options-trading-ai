@@ -2,8 +2,8 @@
 
 import pandas as pd
 
-from trading_ai.strategies.momentum_iv import MomentumIVStrategy
 from trading_ai.strategies.base import StrategyContext
+from trading_ai.strategies.momentum_iv import MomentumIVConfig, MomentumIVStrategy
 
 
 def test_momentum_iv_strategy_uses_feature_fallback() -> None:
@@ -124,3 +124,60 @@ def test_momentum_iv_strategy_uses_option_aggregates() -> None:
 
     assert signal.direction == "CALL"
     assert signal.metadata["option_agg_momentum"] > 0
+
+
+def test_momentum_iv_strategy_blocks_direction_when_theta_drag_high() -> None:
+    strategy = MomentumIVStrategy(MomentumIVConfig(max_theta_magnitude=0.2))
+    context = StrategyContext(
+        ticker="AAPL",
+        underlying_bars=pd.DataFrame(),
+        option_chain={},
+        option_metrics={
+            "call_leg": {
+                "contract_type": "CALL",
+                "open_interest": 150,
+                "greeks": {"delta": 0.55, "theta": -0.6, "vega": 0.04},
+            },
+            "put_leg": {
+                "contract_type": "PUT",
+                "open_interest": 60,
+                "greeks": {"delta": -0.45, "theta": -0.1, "vega": 0.05},
+            },
+        },
+        option_quote={},
+        news_items=[],
+        features={"momentum_15": 0.02},
+    )
+
+    signal = strategy.generate_signal(context)
+
+    assert signal.direction == "NONE"
+
+
+def test_momentum_iv_strategy_requires_supportive_vega_bias() -> None:
+    config = MomentumIVConfig(min_vega_bias=0.01)
+    strategy = MomentumIVStrategy(config)
+    context = StrategyContext(
+        ticker="AAPL",
+        underlying_bars=pd.DataFrame(),
+        option_chain={},
+        option_metrics={
+            "call_leg": {
+                "contract_type": "CALL",
+                "open_interest": 200,
+                "greeks": {"delta": 0.55, "theta": -0.1, "vega": 0.01},
+            },
+            "put_leg": {
+                "contract_type": "PUT",
+                "open_interest": 50,
+                "greeks": {"delta": -0.35, "theta": -0.05, "vega": 0.08},
+            },
+        },
+        option_quote={},
+        news_items=[],
+        features={"momentum_15": 0.03},
+    )
+
+    signal = strategy.generate_signal(context)
+
+    assert signal.direction == "NONE"

@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import orjson
 from loguru import logger
@@ -18,6 +18,7 @@ from trading_ai.risk.manager import PositionSizingInput, RiskManager
 from trading_ai.settings import Settings
 from trading_ai.strategies.base import StrategyContext, TradingSignal
 from trading_ai.strategies.momentum_iv import MomentumIVStrategy
+from trading_ai.service.snapshot_stream import SnapshotStream, SnapshotStreamConfig
 
 
 @dataclass
@@ -39,6 +40,13 @@ class AutoTraderConfig:
     min_option_agg_bars: int = 0
     min_option_agg_volume: float = 0.0
     min_option_agg_vwap: float = 0.0
+    max_option_spread_pct: float = 0.35
+    min_option_liquidity: float = 25.0
+    use_snapshot_stream: bool = False
+    stream_interval_seconds: float = 60.0
+    stream_force_refresh: bool = False
+    stop_loss_fraction: float = 0.05
+    take_profit_reward: float = 3.0
 
 
 @dataclass
@@ -51,6 +59,8 @@ class TradeIntent:
     quantity: int
     entry_price: float
     confidence: float
+    stop_price: Optional[float]
+    take_profit_price: Optional[float]
     metadata: Dict[str, float]
 
 
@@ -66,14 +76,33 @@ class AutoTrader:
         risk_manager: Optional[RiskManager] = None,
         alpaca_client: Optional[AlpacaClient] = None,
         config: Optional[AutoTraderConfig] = None,
+        snapshot_stream: Optional[SnapshotStream] = None,
     ) -> None:
         self.settings = settings
+        self.config = config or AutoTraderConfig()
         self.pipeline = pipeline or SignalPipeline(settings)
         self.strategy = strategy or MomentumIVStrategy()
-        self.risk_manager = risk_manager or RiskManager()
+        self.risk_manager = risk_manager or RiskManager(
+            min_confidence=self.config.min_confidence,
+            max_spread_pct=self.config.max_option_spread_pct,
+            min_liquidity=self.config.min_option_liquidity,
+        )
         self.alpaca = alpaca_client or AlpacaClient(settings)
-        self.config = config or AutoTraderConfig()
         self.log_path = Path(self.config.log_path).expanduser()
+        self.snapshot_stream = snapshot_stream
+        self._owns_stream = False
+        if self.snapshot_stream is None and self.config.use_snapshot_stream:
+            stream_config = SnapshotStreamConfig(
+                lookback_minutes=self.config.lookback_minutes,
+                news_hours=self.config.news_hours,
+                timeframe=self.config.timeframe,
+                include_news=self.config.include_news,
+                use_cache=self.config.use_cache,
+                interval_seconds=self.config.stream_interval_seconds,
+            )
+            self.snapshot_stream = SnapshotStream(self.pipeline, config=stream_config)
+            self.snapshot_stream.start()
+            self._owns_stream = True
 
     def run_once(self) -> List[TradeIntent]:
         """Collect the latest snapshot, score signals, and optionally place orders."""
@@ -84,13 +113,7 @@ class AutoTrader:
             news=self.config.news_hours,
             timeframe=self.config.timeframe,
         )
-        snapshot = self.pipeline.collect_market_snapshot(
-            lookback=timedelta(minutes=self.config.lookback_minutes),
-            news_lookback=timedelta(hours=self.config.news_hours),
-            timeframe=self.config.timeframe,
-            use_cache=self.config.use_cache,
-            include_news=self.config.include_news,
-        )
+        snapshot = self._fetch_snapshot()
         contexts = contexts_from_snapshot(snapshot)
         intents: List[TradeIntent] = []
         for context in contexts:
@@ -109,6 +132,16 @@ class AutoTrader:
             self.run_once()
             time.sleep(max(1, self.config.sleep_seconds))
 
+    def close(self) -> None:
+        if self._owns_stream and self.snapshot_stream:
+            self.snapshot_stream.stop()
+
+    def __del__(self) -> None:  # pragma: no cover - best effort cleanup
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def _build_intent(self, context: StrategyContext) -> Optional[TradeIntent]:
         signal = self.strategy.generate_signal(context)
         if signal.direction == "NONE" or signal.confidence < self.config.min_confidence:
@@ -116,17 +149,6 @@ class AutoTrader:
         entry_price = self._infer_entry_price(signal, context)
         if entry_price is None or entry_price <= 0:
             logger.debug("Skipping signal without price", ticker=context.ticker)
-            return None
-        size = self.risk_manager.size_position(
-            PositionSizingInput(
-                account_equity=self.config.account_equity,
-                trade_risk_fraction=self.config.trade_risk_fraction,
-                contract_price=entry_price,
-                confidence=signal.confidence,
-                max_positions=self.config.max_positions,
-            )
-        )
-        if size <= 0:
             return None
         option_symbol = self._option_symbol(context, signal.direction)
         agg_stats = self._aggregate_health(context, signal.direction)
@@ -144,6 +166,26 @@ class AutoTrader:
                 vwap=agg_vwap,
             )
             return None
+        spread = self._quote_spread(context, signal.direction)
+        size = self.risk_manager.size_position(
+            PositionSizingInput(
+                account_equity=self.config.account_equity,
+                trade_risk_fraction=self.config.trade_risk_fraction,
+                contract_price=entry_price,
+                confidence=signal.confidence,
+                max_positions=self.config.max_positions,
+                spread=spread,
+                available_volume=agg_stats["volume"],
+            )
+        )
+        if size <= 0:
+            return None
+        stop_price = self.risk_manager.stop_loss_price(entry_price, self.config.stop_loss_fraction)
+        take_profit_price = self.risk_manager.take_profit_price(
+            entry_price,
+            reward_multiplier=self.config.take_profit_reward,
+            risk_fraction=self.config.stop_loss_fraction,
+        )
         intent = TradeIntent(
             ticker=context.ticker,
             option_symbol=option_symbol,
@@ -151,11 +193,16 @@ class AutoTrader:
             quantity=size,
             entry_price=entry_price,
             confidence=signal.confidence,
+            stop_price=stop_price,
+            take_profit_price=take_profit_price,
             metadata={
                 **(signal.metadata or {}),
                 "option_agg_bars": agg_stats["bars"],
                 "option_agg_volume": agg_stats["volume"],
                 "option_agg_vwap": agg_vwap,
+                "option_spread": spread,
+                "stop_price": stop_price,
+                "take_profit_price": take_profit_price,
             },
         )
         return intent
@@ -170,6 +217,8 @@ class AutoTrader:
                 qty=intent.quantity,
                 price=intent.entry_price,
                 confidence=intent.confidence,
+                take_profit=intent.take_profit_price,
+                stop_loss=intent.stop_price,
             )
             return {"status": "DRY_RUN", "order_id": None}
         if not intent.option_symbol:
@@ -182,6 +231,8 @@ class AutoTrader:
             quantity=intent.quantity,
             side=side,
             position_intent=position_intent,
+            take_profit_price=intent.take_profit_price,
+            stop_loss_price=intent.stop_price,
         )
         logger.info("Submitted option order", order_id=order_id, symbol=intent.option_symbol)
         return {"status": "SUBMITTED", "order_id": order_id}
@@ -209,6 +260,23 @@ class AutoTrader:
             return bid_f
         return (bid_f + ask_f) / 2
 
+    def _quote_spread(self, context: StrategyContext, direction: str) -> float:
+        quote = context.option_quote
+        if isinstance(quote, dict):
+            leg = quote.get(direction) or quote.get(direction.capitalize())
+            if isinstance(leg, dict):
+                bid = leg.get("bid") or leg.get("bid_price")
+                ask = leg.get("ask") or leg.get("ask_price")
+                try:
+                    bid_f = float(bid) if bid is not None else None
+                    ask_f = float(ask) if ask is not None else None
+                except (TypeError, ValueError):
+                    return 0.0
+                if bid_f is None or ask_f is None:
+                    return 0.0
+                return max(0.0, ask_f - bid_f)
+        return 0.0
+
     def _option_symbol(self, context: StrategyContext, direction: str) -> Optional[str]:
         quote = context.option_quote
         if not isinstance(quote, dict):
@@ -227,6 +295,8 @@ class AutoTrader:
             "quantity": intent.quantity,
             "entry_price": intent.entry_price,
             "confidence": intent.confidence,
+            "stop_price": intent.stop_price,
+            "take_profit_price": intent.take_profit_price,
             "status": result.get("status"),
             "order_id": result.get("order_id"),
             "metadata": intent.metadata,
@@ -244,7 +314,9 @@ class AutoTrader:
             return {"bars": 0, "volume": 0.0}
         bars = len(series)
         volume = 0.0
-        for bar in series[-self.config.min_option_agg_bars or len(series) :]:
+        window_size = self.config.min_option_agg_bars
+        window = series[-window_size:] if window_size else series
+        for bar in window:
             if isinstance(bar, dict):
                 try:
                     volume += float(bar.get("volume") or 0.0)
@@ -268,6 +340,28 @@ class AutoTrader:
         if start == 0:
             return 0.0
         return (end - start) / start
+
+    def _fetch_snapshot(self) -> Dict[str, Any]:
+        if self.snapshot_stream:
+            if self.config.stream_force_refresh:
+                try:
+                    return self.snapshot_stream.refresh_now()
+                except Exception as exc:  # pragma: no cover - network failure path
+                    logger.warning("Snapshot stream refresh failed", error=str(exc))
+            snapshot = self.snapshot_stream.latest_snapshot()
+            if snapshot:
+                return snapshot
+            try:
+                return self.snapshot_stream.refresh_now()
+            except Exception as exc:  # pragma: no cover - network failure path
+                logger.warning("Snapshot stream refresh failed", error=str(exc))
+        return self.pipeline.collect_market_snapshot(
+            lookback=timedelta(minutes=self.config.lookback_minutes),
+            news_lookback=timedelta(hours=self.config.news_hours),
+            timeframe=self.config.timeframe,
+            use_cache=self.config.use_cache,
+            include_news=self.config.include_news,
+        )
 
 
 def _direction_to_side(direction: str):

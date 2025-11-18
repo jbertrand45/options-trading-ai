@@ -28,3 +28,18 @@ def test_settings_alpaca_data_feed_defaults_to_iex(monkeypatch: pytest.MonkeyPat
     settings = Settings()
 
     assert settings.alpaca_data_feed == "IEX"
+
+
+def test_settings_loads_option_agg_thresholds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
+    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
+    monkeypatch.setenv("POLYGON_API_KEY", "polygon")
+    monkeypatch.setenv("MIN_OPTION_AGG_BARS", "25")
+    monkeypatch.setenv("MIN_OPTION_AGG_VOLUME", "123.5")
+    monkeypatch.setenv("MIN_OPTION_AGG_VWAP", "0.04")
+
+    settings = Settings()
+
+    assert settings.min_option_agg_bars == 25
+    assert settings.min_option_agg_volume == pytest.approx(123.5)
+    assert settings.min_option_agg_vwap == pytest.approx(0.04)

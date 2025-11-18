@@ -1,12 +1,14 @@
 """Tests for MarketDataCollector caching behaviour."""
 
-from datetime import datetime, timedelta
+import os
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List
 
 import pandas as pd
 import pytest
 
-from trading_ai.core.collector import MarketDataCollector
+from trading_ai.clients.base import APIClientError
+from trading_ai.core.collector import MarketDataCollector, _regular_session_open_utc
 from trading_ai.data.cache import LocalDataCache
 from trading_ai.settings import Settings
 
@@ -131,7 +133,20 @@ class EmptyPolygon(DummyPolygon):
         return []
 
 
-def build_settings(monkeypatch: pytest.MonkeyPatch, *, use_polygon_bars: bool = True) -> Settings:
+class FailingAlpaca(DummyAlpaca):
+    def fetch_option_chain(self, **_: Any):
+        raise APIClientError("chain down")
+
+    def fetch_option_metrics(self, **_: Any):
+        raise APIClientError("metrics down")
+
+
+class FailingPolygonAgg(DummyPolygon):
+    def fetch_option_aggregates(self, *args: Any, **kwargs: Any) -> Iterable[Dict[str, Any]]:
+        raise APIClientError("agg down")
+
+
+def build_settings(monkeypatch: pytest.MonkeyPatch, *, use_polygon_bars: bool = True, enable_option_aggregates: bool = True) -> Settings:
     monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
     monkeypatch.setenv("POLYGON_API_KEY", "polygon")
@@ -139,6 +154,10 @@ def build_settings(monkeypatch: pytest.MonkeyPatch, *, use_polygon_bars: bool = 
     monkeypatch.setenv("NEWS_SECRET_KEY", "secret")
     monkeypatch.setenv("TARGET_TICKERS", '["AAPL"]')
     monkeypatch.setenv("USE_POLYGON_BARS", "1" if use_polygon_bars else "0")
+    monkeypatch.setenv("ENABLE_OPTION_AGGREGATES", "1" if enable_option_aggregates else "0")
+    monkeypatch.setenv("USE_ALPACA_OPTION_CHAIN", "1")
+    if "ENABLE_UNDERLYING_BARS" not in os.environ:
+        monkeypatch.setenv("ENABLE_UNDERLYING_BARS", "1")
     return Settings()
 
 
@@ -286,3 +305,146 @@ def test_market_data_collector_fetches_option_aggregates(tmp_path, monkeypatch: 
     assert "CALL" in aggs
     assert aggs["CALL"][0]["close"] == pytest.approx(1.1)
     assert polygon.agg_calls >= 1
+
+
+def test_option_aggregates_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = build_settings(monkeypatch, enable_option_aggregates=False)
+    polygon = DummyPolygon()
+    collector = MarketDataCollector(
+        settings,
+        cache=LocalDataCache(),
+        alpaca_client=DummyAlpaca(),  # type: ignore[arg-type]
+        polygon_client=polygon,  # type: ignore[arg-type]
+        aggregator=DummyAggregator(),  # type: ignore[arg-type]
+    )
+
+    start = datetime.utcnow() - timedelta(minutes=10)
+    end = datetime.utcnow()
+    option_quote = {"CALL": {"symbol": "TEST"}}
+
+    aggregates = collector.collect_option_aggregates(
+        option_quote=option_quote,
+        start=start,
+        end=end,
+        timeframe="1Min",
+        use_cache=False,
+    )
+
+    assert aggregates == {}
+    assert polygon.agg_calls == 0
+
+
+def test_option_quote_falls_back_to_polygon_metrics(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = build_settings(monkeypatch)
+    cache = LocalDataCache(root=tmp_path / "cache")
+    collector = MarketDataCollector(
+        settings,
+        cache=cache,
+        alpaca_client=DummyAlpaca(),  # type: ignore[arg-type]
+        polygon_client=DummyPolygon(),  # type: ignore[arg-type]
+        aggregator=DummyAggregator(),  # type: ignore[arg-type]
+    )
+    bars = pd.DataFrame({"close": [100.0, 101.0]})
+    metrics = {
+        "AAPL251107C00100000": {
+            "contract_type": "CALL",
+            "strike_price": 101.0,
+            "open_interest": 50,
+            "expiration_date": "2025-11-20",
+            "last_quote": {"bid_price": 1.0, "ask_price": 1.2},
+        },
+        "AAPL251107P00100000": {
+            "contract_type": "PUT",
+            "strike_price": 99.0,
+            "open_interest": 40,
+            "expiration_date": "2025-11-20",
+            "last_quote": {"bid_price": 0.9, "ask_price": 1.1},
+        },
+    }
+
+    quotes = collector.collect_option_quote("AAPL", option_chain=None, option_metrics=metrics, bars=bars)
+
+    assert set(quotes.keys()) == {"CALL", "PUT"}
+    assert quotes["CALL"]["source"] == "polygon"
+    assert quotes["PUT"]["symbol"] == "AAPL251107P00100000"
+
+
+def test_collect_market_snapshot_handles_option_chain_failure(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = build_settings(monkeypatch)
+    cache = LocalDataCache(root=tmp_path / "cache")
+    collector = MarketDataCollector(
+        settings,
+        cache=cache,
+        alpaca_client=FailingAlpaca(),  # type: ignore[arg-type]
+        polygon_client=DummyPolygon(),  # type: ignore[arg-type]
+        aggregator=DummyAggregator(),  # type: ignore[arg-type]
+    )
+
+    snapshot = collector.collect_market_snapshot(
+        tickers=["AAPL"],
+        lookback=timedelta(minutes=5),
+        news_lookback=timedelta(minutes=5),
+        timeframe="1Min",
+        use_cache=False,
+    )
+
+    assert snapshot["AAPL"]["option_chain"] == {}
+
+
+def test_collect_market_snapshot_handles_option_aggregate_failure(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = build_settings(monkeypatch)
+    cache = LocalDataCache(root=tmp_path / "cache")
+    collector = MarketDataCollector(
+        settings,
+        cache=cache,
+        alpaca_client=DummyAlpaca(),  # type: ignore[arg-type]
+        polygon_client=FailingPolygonAgg(),  # type: ignore[arg-type]
+        aggregator=DummyAggregator(),  # type: ignore[arg-type]
+    )
+
+    snapshot = collector.collect_market_snapshot(
+        tickers=["AAPL"],
+        lookback=timedelta(minutes=5),
+        news_lookback=timedelta(minutes=5),
+        timeframe="1Min",
+        use_cache=False,
+    )
+
+    assert snapshot["AAPL"]["option_aggregates"] == {}
+
+
+def test_market_data_collector_skips_underlying_bars_when_disabled(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENABLE_UNDERLYING_BARS", "0")
+    settings = build_settings(monkeypatch)
+    cache = LocalDataCache(root=tmp_path / "cache")
+    alpaca = DummyAlpaca()
+    collector = MarketDataCollector(
+        settings,
+        cache=cache,
+        alpaca_client=alpaca,  # type: ignore[arg-type]
+        polygon_client=DummyPolygon(),  # type: ignore[arg-type]
+        aggregator=DummyAggregator(),  # type: ignore[arg-type]
+    )
+
+    snapshot = collector.collect_market_snapshot(
+        tickers=["AAPL"],
+        lookback=timedelta(minutes=5),
+        news_lookback=timedelta(minutes=5),
+        timeframe="1Min",
+        use_cache=False,
+    )
+
+    assert alpaca.bar_calls == 0
+    assert snapshot["AAPL"]["underlying_bars"].empty
+
+
+def test_regular_session_open_utc_after_open() -> None:
+    ts = datetime(2025, 11, 14, 15, 0, tzinfo=timezone.utc)
+    open_ts = _regular_session_open_utc(ts)
+    assert open_ts == datetime(2025, 11, 14, 14, 30, tzinfo=timezone.utc)
+
+
+def test_regular_session_open_utc_before_open() -> None:
+    ts = datetime(2025, 11, 14, 13, 0, tzinfo=timezone.utc)
+    open_ts = _regular_session_open_utc(ts)
+    assert open_ts == datetime(2025, 11, 13, 14, 30, tzinfo=timezone.utc)

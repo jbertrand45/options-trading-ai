@@ -28,6 +28,11 @@ class MomentumIVConfig:
     option_agg_weight: float = 0.2
     option_agg_vwap_weight: float = 0.15
     option_agg_lookback: int = 15  # minutes
+    min_vega_bias: float = 0.02
+    max_theta_magnitude: float = 0.35
+    theta_health_scale: float = 0.25
+    vega_weight: float = 0.1
+    theta_weight: float = 0.1
 
 
 class MomentumIVStrategy(TradingStrategy):
@@ -203,12 +208,16 @@ class MomentumIVStrategy(TradingStrategy):
         flow_bias: float,
         agg_momentum: float,
         agg_vwap: float,
+        vega_bias: float,
+        theta_health: float,
     ) -> float:
         momentum_score = min(abs(momentum) / (self.config.momentum_threshold * 2), 1.0)
         iv_score = 0.0 if np.isnan(iv_change) else min(abs(iv_change) / 0.1, 1.0)
         flow_score = min(abs(flow_bias), 1.0)
         agg_score = min(abs(agg_momentum) / max(self.config.momentum_threshold, 1e-6), 1.0)
         agg_vwap_score = min(abs(agg_vwap) / max(self.config.momentum_threshold, 1e-6), 1.0)
+        vega_score = min(max(vega_bias, 0.0) / max(self.config.min_vega_bias, 1e-6), 1.0)
+        theta_score = max(0.0, min(theta_health, 1.0))
         weights = (
             self.config.momentum_weight,
             self.config.iv_weight,
@@ -216,6 +225,8 @@ class MomentumIVStrategy(TradingStrategy):
             self.config.option_flow_weight,
             self.config.option_agg_weight,
             self.config.option_agg_vwap_weight,
+            self.config.vega_weight,
+            self.config.theta_weight,
         )
         total_weight = sum(weights) or 1.0
         raw = (
@@ -225,6 +236,8 @@ class MomentumIVStrategy(TradingStrategy):
             + weights[3] * flow_score
             + weights[4] * agg_score
             + weights[5] * agg_vwap_score
+            + weights[6] * vega_score
+            + weights[7] * theta_score
         ) / total_weight
         baseline = self.config.baseline_confidence / self.config.max_confidence
         raw = max(baseline, raw)
@@ -255,9 +268,17 @@ class MomentumIVStrategy(TradingStrategy):
         put_oi = 0.0
         call_delta = 0.0
         put_delta = 0.0
+        call_theta_sum = 0.0
+        put_theta_sum = 0.0
+        call_vega_sum = 0.0
+        put_vega_sum = 0.0
+        call_greek_weight = 0.0
+        put_greek_weight = 0.0
 
         def _ingest(source: Optional[Any]) -> None:
             nonlocal call_oi, put_oi, call_delta, put_delta
+            nonlocal call_theta_sum, put_theta_sum, call_vega_sum, put_vega_sum
+            nonlocal call_greek_weight, put_greek_weight
             if not source:
                 return
             if isinstance(source, dict):
@@ -279,15 +300,27 @@ class MomentumIVStrategy(TradingStrategy):
                     open_interest = self._estimate_liquidity(payload)
                 greeks = payload.get("greeks") or {}
                 delta = self._coerce_float(greeks.get("delta")) or 0.0
+                theta = self._coerce_float(greeks.get("theta"))
+                vega = self._coerce_float(greeks.get("vega"))
                 weight = open_interest if open_interest and open_interest > 0 else abs(delta)
                 if weight is None or weight <= 0:
                     continue
                 if contract_type == "CALL":
                     call_oi += weight
                     call_delta += delta * weight
+                    if theta is not None:
+                        call_theta_sum += theta * weight
+                        call_greek_weight += weight
+                    if vega is not None:
+                        call_vega_sum += vega * weight
                 else:
                     put_oi += weight
                     put_delta += delta * weight
+                    if theta is not None:
+                        put_theta_sum += theta * weight
+                        put_greek_weight += weight
+                    if vega is not None:
+                        put_vega_sum += vega * weight
 
         _ingest(option_metrics)
         if call_oi + put_oi == 0:
@@ -302,11 +335,21 @@ class MomentumIVStrategy(TradingStrategy):
             aggregated_delta = 0.0
         flow_ratio = max(-1.0, min(flow_ratio, 1.0))
         aggregated_delta = max(-1.0, min(aggregated_delta, 1.0))
+        call_theta = call_theta_sum / call_greek_weight if call_greek_weight else 0.0
+        put_theta = put_theta_sum / put_greek_weight if put_greek_weight else 0.0
+        call_vega = call_vega_sum / call_greek_weight if call_greek_weight else 0.0
+        put_vega = put_vega_sum / put_greek_weight if put_greek_weight else 0.0
         return {
             "call_open_interest": call_oi,
             "put_open_interest": put_oi,
             "flow_ratio": flow_ratio,
             "delta_bias": aggregated_delta,
+            "call_theta": call_theta,
+            "put_theta": put_theta,
+            "call_vega": call_vega,
+            "put_vega": put_vega,
+            "vega_bias": call_vega - put_vega,
+            "theta_bias": put_theta - call_theta,
         }
 
     def _coerce_float(self, value: Any) -> Optional[float]:
@@ -357,8 +400,21 @@ class MomentumIVStrategy(TradingStrategy):
         if abs(flow_metrics["delta_bias"]) > abs(flow_bias):
             flow_bias = flow_metrics["delta_bias"]
         direction = self._determine_direction(momentum, iv_change, flow_bias)
+        if direction != "NONE" and not self._passes_greek_filters(direction, flow_metrics):
+            direction = "NONE"
         news_bias = self._news_bias(context.news_items)
-        confidence = self._confidence_score(momentum, iv_change, news_bias, flow_bias, agg_momentum, agg_vwap)
+        directional_vega_bias = self._directional_vega_bias(direction, flow_metrics)
+        theta_health = self._theta_health(direction, flow_metrics)
+        confidence = self._confidence_score(
+            momentum,
+            iv_change,
+            news_bias,
+            flow_bias,
+            agg_momentum,
+            agg_vwap,
+            directional_vega_bias,
+            theta_health,
+        )
 
         signal = TradingSignal(
             ticker=context.ticker,
@@ -373,6 +429,52 @@ class MomentumIVStrategy(TradingStrategy):
                 "delta_bias": flow_metrics["delta_bias"],
                 "option_agg_momentum": agg_momentum,
                 "option_agg_vwap": agg_vwap,
+                "call_theta": flow_metrics["call_theta"],
+                "put_theta": flow_metrics["put_theta"],
+                "call_vega": flow_metrics["call_vega"],
+                "put_vega": flow_metrics["put_vega"],
+                "vega_bias": flow_metrics["vega_bias"],
+                "theta_bias": flow_metrics["theta_bias"],
             },
         )
         return signal
+
+    def _passes_greek_filters(self, direction: str, flow_metrics: Dict[str, float]) -> bool:
+        if direction == "NONE":
+            return True
+        vega_margin = self.config.min_vega_bias
+        theta_limit = self.config.max_theta_magnitude
+        call_theta = abs(flow_metrics.get("call_theta", 0.0))
+        put_theta = abs(flow_metrics.get("put_theta", 0.0))
+        call_vega = flow_metrics.get("call_vega", 0.0)
+        put_vega = flow_metrics.get("put_vega", 0.0)
+        if direction == "CALL":
+            if call_vega < put_vega - vega_margin:
+                return False
+            if theta_limit > 0 and call_theta > theta_limit:
+                return False
+        elif direction == "PUT":
+            if put_vega < call_vega - vega_margin:
+                return False
+            if theta_limit > 0 and put_theta > theta_limit:
+                return False
+        return True
+
+    def _directional_vega_bias(self, direction: str, flow_metrics: Dict[str, float]) -> float:
+        base_bias = flow_metrics.get("vega_bias", 0.0)
+        if direction == "PUT":
+            return -base_bias
+        if direction == "CALL":
+            return base_bias
+        return abs(base_bias)
+
+    def _theta_health(self, direction: str, flow_metrics: Dict[str, float]) -> float:
+        if direction == "CALL":
+            theta = abs(flow_metrics.get("call_theta", 0.0))
+        elif direction == "PUT":
+            theta = abs(flow_metrics.get("put_theta", 0.0))
+        else:
+            theta = (abs(flow_metrics.get("call_theta", 0.0)) + abs(flow_metrics.get("put_theta", 0.0))) / 2
+        scale = max(self.config.theta_health_scale, 1e-6)
+        normalized = min(theta / scale, 1.0)
+        return 1.0 - normalized

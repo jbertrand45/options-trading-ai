@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     alpaca_api_secret_key: str = Field(..., alias="ALPACA_API_SECRET_KEY")
     alpaca_paper_base_url: str = Field("https://paper-api.alpaca.markets", alias="ALPACA_PAPER_BASE_URL")
     alpaca_data_feed: str = Field("IEX", alias="ALPACA_DATA_FEED")
+    alpaca_data_override_ip: str | None = Field(None, alias="ALPACA_DATA_OVERRIDE_IP")
+    alpaca_ca_bundle: str | None = Field(None, alias="ALPACA_CA_BUNDLE")
+    alpaca_verify_tls: bool = Field(True, alias="ALPACA_VERIFY_TLS")
 
     polygon_api_key: str = Field(..., alias="POLYGON_API_KEY")
     polygon_base_url: str = Field("https://api.polygon.io", alias="POLYGON_BASE_URL")
@@ -45,6 +48,8 @@ class Settings(BaseSettings):
     enable_news: bool = Field(True, alias="ENABLE_NEWS")
     use_polygon_bars: bool = Field(False, alias="USE_POLYGON_BARS")
     option_metrics_limit: int = Field(300, alias="OPTION_METRICS_LIMIT")
+    enable_underlying_bars: bool = Field(True, alias="ENABLE_UNDERLYING_BARS")
+    use_alpaca_option_chain: bool = Field(True, alias="USE_ALPACA_OPTION_CHAIN")
     auto_min_confidence: float = Field(0.55, alias="AUTO_MIN_CONFIDENCE")
     auto_risk_fraction: float = Field(0.02, alias="AUTO_RISK_FRACTION")
     auto_max_positions: int = Field(1, alias="AUTO_MAX_POSITIONS")
@@ -52,6 +57,13 @@ class Settings(BaseSettings):
     auto_interval_seconds: int = Field(60, alias="AUTO_INTERVAL_SECONDS")
     auto_include_news: bool = Field(False, alias="AUTO_INCLUDE_NEWS")
     auto_use_cache: bool = Field(False, alias="AUTO_USE_CACHE")
+    auto_use_snapshot_stream: bool = Field(False, alias="AUTO_USE_SNAPSHOT_STREAM")
+    auto_stream_interval_seconds: float = Field(60.0, alias="AUTO_STREAM_INTERVAL_SECONDS")
+    auto_stream_force_refresh: bool = Field(False, alias="AUTO_STREAM_FORCE_REFRESH")
+    enable_option_aggregates: bool = Field(True, alias="ENABLE_OPTION_AGGREGATES")
+    min_option_agg_bars: int = Field(0, alias="MIN_OPTION_AGG_BARS")
+    min_option_agg_volume: float = Field(0.0, alias="MIN_OPTION_AGG_VOLUME")
+    min_option_agg_vwap: float = Field(0.0, alias="MIN_OPTION_AGG_VWAP")
 
     @field_validator("target_tickers", mode="before")
     @classmethod

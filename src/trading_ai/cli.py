@@ -69,6 +69,24 @@ def command_auto_trade(args: argparse.Namespace) -> None:
     interval = args.interval if args.interval is not None else settings.auto_interval_seconds
     include_news = settings.auto_include_news if args.include_news is None else args.include_news
     use_cache = settings.auto_use_cache if args.use_cache is None else args.use_cache
+    use_snapshot_stream = (
+        settings.auto_use_snapshot_stream if args.use_snapshot_stream is None else args.use_snapshot_stream
+    )
+    stream_interval = (
+        args.stream_interval if args.stream_interval is not None else settings.auto_stream_interval_seconds
+    )
+    stream_force_refresh = (
+        settings.auto_stream_force_refresh if args.stream_force_refresh is None else args.stream_force_refresh
+    )
+    min_option_agg_bars = (
+        args.min_option_agg_bars if args.min_option_agg_bars is not None else settings.min_option_agg_bars
+    )
+    min_option_agg_volume = (
+        args.min_option_agg_volume if args.min_option_agg_volume is not None else settings.min_option_agg_volume
+    )
+    min_option_agg_vwap = (
+        args.min_option_agg_vwap if args.min_option_agg_vwap is not None else settings.min_option_agg_vwap
+    )
     config = AutoTraderConfig(
         lookback_minutes=args.lookback_minutes,
         news_hours=args.news_hours,
@@ -81,27 +99,40 @@ def command_auto_trade(args: argparse.Namespace) -> None:
         include_news=include_news,
         use_cache=use_cache,
         sleep_seconds=interval,
-        min_option_agg_bars=args.min_option_agg_bars or 0,
-        min_option_agg_volume=args.min_option_agg_volume or 0.0,
-        min_option_agg_vwap=args.min_option_agg_vwap or 0.0,
+        min_option_agg_bars=min_option_agg_bars,
+        min_option_agg_volume=min_option_agg_volume,
+        min_option_agg_vwap=min_option_agg_vwap,
+        max_option_spread_pct=args.max_option_spread_pct,
+        min_option_liquidity=args.min_option_liquidity,
+        use_snapshot_stream=use_snapshot_stream,
+        stream_interval_seconds=stream_interval,
+        stream_force_refresh=stream_force_refresh,
+    )
+    risk_manager = RiskManager(
+        min_confidence=min_conf,
+        max_spread_pct=config.max_option_spread_pct,
+        min_liquidity=config.min_option_liquidity,
     )
     trader = AutoTrader(
         settings,
         pipeline=SignalPipeline(settings),
         strategy=MomentumIVStrategy(),
-        risk_manager=RiskManager(min_confidence=min_conf),
+        risk_manager=risk_manager,
         config=config,
     )
-    if args.loop:
-        trader.run_loop()
-    else:
-        intents = trader.run_once()
-        if not intents:
-            print("No trades met the criteria.")
+    try:
+        if args.loop:
+            trader.run_loop()
         else:
-            print("Generated trade intents:")
-            for intent in intents:
-                print(intent)
+            intents = trader.run_once()
+            if not intents:
+                print("No trades met the criteria.")
+            else:
+                print("Generated trade intents:")
+                for intent in intents:
+                    print(intent)
+    finally:
+        trader.close()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -128,9 +159,36 @@ def build_parser() -> argparse.ArgumentParser:
     auto.add_argument("--risk-fraction", type=float, default=None, help="Fraction of equity risked per trade.")
     auto.add_argument("--max-positions", type=int, default=None, help="Maximum contracts per trade.")
     auto.add_argument("--account-equity", type=float, default=None, help="Account equity for sizing calculations.")
-    auto.add_argument("--min-option-agg-bars", type=int, default=0, help="Minimum number of Polygon option aggregate bars required.")
-    auto.add_argument("--min-option-agg-volume", type=float, default=0.0, help="Minimum summed volume across Polygon option aggregates.")
-    auto.add_argument("--min-option-agg-vwap", type=float, default=0.0, help="Minimum absolute VWAP trend required from Polygon option aggregates.")
+    auto.add_argument(
+        "--min-option-agg-bars",
+        type=int,
+        default=None,
+        help="Minimum number of Polygon option aggregate bars required.",
+    )
+    auto.add_argument(
+        "--min-option-agg-volume",
+        type=float,
+        default=None,
+        help="Minimum summed volume across Polygon option aggregates.",
+    )
+    auto.add_argument(
+        "--min-option-agg-vwap",
+        type=float,
+        default=None,
+        help="Minimum absolute VWAP trend required from Polygon option aggregates.",
+    )
+    auto.add_argument(
+        "--max-option-spread-pct",
+        type=float,
+        default=0.35,
+        help="Maximum bid/ask spread (fraction of option price) allowed when sizing trades.",
+    )
+    auto.add_argument(
+        "--min-option-liquidity",
+        type=float,
+        default=25.0,
+        help="Minimum cumulative option volume required to allocate capital.",
+    )
     auto.add_argument(
         "--include-news",
         action=argparse.BooleanOptionalAction,
@@ -142,6 +200,24 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Allow cached data for collection.",
+    )
+    auto.add_argument(
+        "--use-snapshot-stream",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Maintain a rolling snapshot between cycles instead of collecting every run.",
+    )
+    auto.add_argument(
+        "--stream-interval",
+        type=float,
+        default=None,
+        help="Interval (seconds) between background snapshot refreshes when streaming.",
+    )
+    auto.add_argument(
+        "--stream-force-refresh",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Force a fresh snapshot each cycle even when the stream has cached data.",
     )
     auto.add_argument("--loop", action="store_true", help="Continuously run until interrupted.")
     auto.add_argument("--interval", type=int, default=None, help="Sleep seconds between loops when --loop is set.")

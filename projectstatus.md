@@ -1,5 +1,14 @@
 ## Project Status – 2025-11-06
 
+### Update – Live data plumbing + network blockers (2025-11-12)
+- Snapshot ingestion + backtests now cover all 2025‑11‑10 runs; only one OPEN put trade fired (negative P&L) so we need more market-hours data before tuning thresholds.
+- `SnapshotStream` + AutoTrader streaming path is live-tested; dry-run cycles work when data providers respond. Alpaca TLS issues are mitigated via new `ALPACA_CA_BUNDLE` / `ALPACA_VERIFY_TLS` knobs (temporarily running with verification off until a trusted CA is installed).
+- Massive/Polygon option feeds remain blocked by this network: both `api.polygon.io` and `api.massive.com` fail DNS or socket connect (`PermissionError: Operation not permitted`). We added `POLYGON_BASE_URL=https://api.massive.com` + `POLYGON_API_OVERRIDE_IP=198.44.194.18`, but outbound 443 to that IP is still rejected. Need IT or Massive support to whitelist the host/IP or provide a proxy.
+- AutoTrader loop (`scripts/run_auto_trader.sh`) can run, but without Massive data it only sees Alpaca quotes/bars. Until the firewall issue is resolved we’ll continue collecting via Alpaca and monitor `data/logs/auto_trader_service.log` for partial cycles.
+- DuckDB (`data/snapshots.duckdb`) holds nine snapshot timestamps; use `scripts/ingest_snapshot.py` after each session so dashboards/backtests can query aggregated bars and option metrics once the feed is restored.
+- Attempts to use Massive’s official client (GitHub repo) and websocket endpoint (`wss://socket.massive.com/stocks`) also fail locally (`git clone https://github.com/massive-com/client-python` → `Could not resolve host`, `wscat -c …` → `getaddrinfo ENOTFOUND`), so this host still cannot reach any Massive infrastructure despite the hosts override. Need IT/security to allow outbound TCP/443 to `api.massive.com` (198.44.194.18) or provide the corporate proxy details before continuing.
+
+
 ### Data & Infrastructure
 - Snapshot collection CLI (`python -m trading_ai collect-snapshots`) supports `--skip-news`/`--no-cache`; scheduling via `scripts/collect_snapshots.sh` with logs in `data/logs/`.
 - Snapshots store intraday data as JSON; DuckDB ingestion (`scripts/ingest_snapshot.py`, `src/trading_ai/data/duckdb_store.py`) prepares them for analysis/backtests.
@@ -42,5 +51,6 @@
 - `BacktestRunner` skips low-confidence/sub‑$0.30 fills and prefers aggregate closes for exit prices, producing realistic option P&L. Tests cover collector/strategy/backtester behavior with the new data.
 - AutoTrader now enforces tape-health filters before sizing trades. Config/CLI flags (`--min-option-agg-bars`, `--min-option-agg-volume`, `--min-option-agg-vwap`) plus logging ensure we only trade liquid contracts with constructive VWAP drift. The helper script and scheduling docs were updated so cron/launchd jobs pass these thresholds automatically.
 - `.env.example` includes the new knobs; run snapshot + auto-trader loops with the suggested defaults (20 bars, 50 contracts of volume, ≥2% VWAP trend) for best results.
+- CLI invocations now read `MIN_OPTION_AGG_*` values from `.env`, so ad-hoc runs inherit the same tape-health guardrails as the scheduled jobs without extra flags.
 
 **Next step:** Add dashboards/monitoring (Grafana/Streamlit) reading DuckDB aggregates so we can visualize option VWAP trends, auto-trader intents, and risk metrics in near real-time before moving to live capital.

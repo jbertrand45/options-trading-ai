@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
+from zoneinfo import ZoneInfo
 
 from trading_ai.clients import (
     AlpacaClient,
@@ -41,6 +42,8 @@ class MarketDataCollector:
         self.polygon = polygon_client or PolygonClient(settings)
         self.enable_news = settings.enable_news
         self.use_polygon_bars = settings.use_polygon_bars
+        self.enable_underlying_bars = settings.enable_underlying_bars
+        self.use_alpaca_option_chain = settings.use_alpaca_option_chain
 
         base_news_client = news_client or (NewsClient(settings) if settings.news_api_key else None)
         yahoo_client = YahooNewsClient()
@@ -171,6 +174,11 @@ class MarketDataCollector:
         use_cache: bool = True,
     ) -> Any:
         cache_key = ("alpaca", "option-chain", ticker, expiration.isoformat() if expiration else "any")
+        if not self.use_alpaca_option_chain:
+            if use_cache and self.cache.exists(*cache_key, suffix=".json"):
+                return self.cache.read_json(*cache_key)
+            logger.debug("Skipping Alpaca option chain (disabled via settings)", ticker=ticker)
+            return {}
         if use_cache and self.cache.exists(*cache_key, suffix=".json"):
             return self.cache.read_json(*cache_key)
 
@@ -214,6 +222,7 @@ class MarketDataCollector:
                 "implied_volatility": payload.get("implied_volatility"),
                 "open_interest": payload.get("open_interest"),
                 "greeks": greeks,
+                "last_quote": payload.get("last_quote") or {},
             }
         if metrics:
             self.cache.write_json(metrics, *cache_key)
@@ -224,6 +233,7 @@ class MarketDataCollector:
         ticker: str,
         *,
         option_chain: Any | None = None,
+        option_metrics: Optional[Dict[str, Any]] = None,
         bars: pd.DataFrame | None = None,
         use_cache: bool = False,
     ) -> Dict[str, Any]:
@@ -231,8 +241,11 @@ class MarketDataCollector:
 
         if option_chain is None:
             logger.debug("Skipping option quote fetch; option chain missing", ticker=ticker)
-            return {}
-        quotes = self._select_reference_quotes(option_chain, bars)
+            quotes: Dict[str, Any] = {}
+        else:
+            quotes = self._select_reference_quotes(option_chain, bars)
+        if not quotes and option_metrics:
+            quotes = self._quotes_from_option_metrics(option_metrics, bars)
         if use_cache and quotes:
             cache_key = ("alpaca", "option-quote", ticker)
             self.cache.write_json(quotes, *cache_key)
@@ -248,6 +261,10 @@ class MarketDataCollector:
         use_cache: bool = True,
     ) -> Dict[str, Any]:
         """Fetch Polygon option aggregates for the representative call/put selections."""
+
+        if not self.settings.enable_option_aggregates:
+            logger.debug("Skipping option aggregates (disabled via settings)")
+            return {}
 
         aggregates: Dict[str, Any] = {}
         now_bucket = end.strftime("%Y%m%d_%H%M%S")
@@ -368,6 +385,60 @@ class MarketDataCollector:
                 best[option_type] = (score, payload)
         return {opt_type: payload for opt_type, (_, payload) in best.items()}
 
+    def _quotes_from_option_metrics(
+        self,
+        option_metrics: Dict[str, Any],
+        bars: pd.DataFrame | None = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fallback: synthesize quotes from Polygon option metrics when Alpaca chain fails."""
+
+        price = None
+        if isinstance(bars, pd.DataFrame) and not bars.empty and "close" in bars:
+            try:
+                price = float(bars["close"].astype(float).iloc[-1])
+            except (TypeError, ValueError):
+                price = None
+
+        best: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        for symbol, payload in option_metrics.items():
+            if not isinstance(payload, dict):
+                continue
+            leg = str(payload.get("contract_type") or "").upper()
+            if leg not in {"CALL", "PUT"}:
+                continue
+            quote = payload.get("last_quote") or {}
+            bid = _sanitize_quote_value(quote.get("bid_price") or quote.get("bid"))
+            ask = _sanitize_quote_value(quote.get("ask_price") or quote.get("ask"))
+            if ask is None:
+                continue
+            if bid is None:
+                bid = ask
+            strike = _sanitize_quote_value(payload.get("strike_price"))
+            if strike is None:
+                continue
+            price_diff = abs(strike - price) if (price is not None) else 0.0
+            oi = _sanitize_quote_value(payload.get("open_interest")) or 0.0
+            score = (price_diff, -oi)
+            candidate = {
+                "symbol": symbol,
+                "option_type": leg,
+                "strike": strike,
+                "expiration": payload.get("expiration_date"),
+                "bid": bid,
+                "ask": ask,
+                "mid": (bid + ask) / 2 if ask is not None else bid,
+                "source": "polygon",
+            }
+            if price is not None:
+                candidate["underlying_price"] = price
+            current = best.get(leg)
+            if current is None or score < current[0]:
+                best[leg] = (score, candidate)
+        quotes = {leg: payload for leg, (_, payload) in best.items()}
+        if quotes:
+            logger.debug("Using Polygon option metrics fallback for quotes", legs=list(quotes.keys()))
+        return quotes
+
     def _frame_from_latest_trade(self, ticker: str) -> pd.DataFrame:
         try:
             trade_resp = self.alpaca.fetch_latest_trade(symbol=ticker)
@@ -394,38 +465,64 @@ class MarketDataCollector:
     ) -> Dict[str, Dict[str, Any]]:
         now = datetime.utcnow().replace(tzinfo=timezone.utc)
         bar_start = now - lookback
+        session_open = _regular_session_open_utc(now)
+        if bar_start < session_open:
+            logger.debug(
+                "Clamping bar lookback to regular session open",
+                requested_start=bar_start.isoformat(),
+                session_open=session_open.isoformat(),
+            )
+            bar_start = session_open
         news_since = now - news_lookback
         snapshot: Dict[str, Dict[str, Any]] = {}
         ticker_list = list(tickers or self.settings.target_tickers)
 
         for ticker in ticker_list:
             logger.info("Collecting market snapshot", ticker=ticker)
-            bars = self.collect_underlying_bars(
-                ticker,
-                start=bar_start,
-                end=now,
-                timeframe=timeframe,
-                use_cache=use_cache,
-            )
-            option_chain = self.collect_option_chain(ticker, use_cache=use_cache)
-            option_metrics = self.collect_option_metrics(ticker, use_cache=use_cache)
-            option_quote = self.collect_option_quote(
-                ticker,
-                option_chain=option_chain,
-                bars=bars,
-            )
-            option_aggs: Dict[str, Any] = {}
-            if option_quote:
-                option_aggs = self.collect_option_aggregates(
-                    option_quote=option_quote,
+            if self.enable_underlying_bars:
+                bars = self.collect_underlying_bars(
+                    ticker,
                     start=bar_start,
                     end=now,
                     timeframe=timeframe,
                     use_cache=use_cache,
                 )
+            else:
+                bars = pd.DataFrame()
+            try:
+                option_chain = self.collect_option_chain(ticker, use_cache=use_cache)
+            except APIClientError as exc:
+                logger.warning("Option chain unavailable", ticker=ticker, error=str(exc))
+                option_chain = {}
+            try:
+                option_metrics = self.collect_option_metrics(ticker, use_cache=use_cache)
+            except APIClientError as exc:
+                logger.warning("Option metrics unavailable", ticker=ticker, error=str(exc))
+                option_metrics = {}
+            option_quote = self.collect_option_quote(
+                ticker,
+                option_chain=option_chain,
+                option_metrics=option_metrics,
+                bars=bars if not bars.empty else None,
+            )
+            option_aggs: Dict[str, Any] = {}
+            if option_quote:
+                try:
+                    option_aggs = self.collect_option_aggregates(
+                        option_quote=option_quote,
+                        start=bar_start,
+                        end=now,
+                        timeframe=timeframe,
+                        use_cache=use_cache,
+                    )
+                except APIClientError as exc:
+                    logger.warning("Option aggregates unavailable", ticker=ticker, error=str(exc))
             news_items: List[Dict[str, Any]] = []
             if include_news:
-                news_items = self.collect_news(ticker, since=news_since, use_cache=use_cache)
+                try:
+                    news_items = self.collect_news(ticker, since=news_since, use_cache=use_cache)
+                except APIClientError as exc:
+                    logger.warning("News collection failed", ticker=ticker, error=str(exc))
 
             snapshot[ticker] = {
                 "collected_at": now.isoformat(),
@@ -525,3 +622,34 @@ def _sanitize_quote_value(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+MARKET_TZ = ZoneInfo("America/New_York")
+MARKET_OPEN = time(9, 30)
+_WEEKEND = {5, 6}  # Saturday, Sunday
+
+
+def _regular_session_open_utc(reference: datetime) -> datetime:
+    """
+    Return the most recent regular-session open (09:30 ET) in UTC.
+
+    If called before the current day's open, this rolls back to the previous
+    trading day's open so we never request pre-market data from IEX.
+    """
+
+    local = reference.astimezone(MARKET_TZ)
+    session_date = local.date()
+    if local.weekday() in _WEEKEND:
+        session_date = _previous_trading_day(session_date)
+    open_local = datetime.combine(session_date, MARKET_OPEN, tzinfo=MARKET_TZ)
+    if local < open_local:
+        session_date = _previous_trading_day(session_date)
+        open_local = datetime.combine(session_date, MARKET_OPEN, tzinfo=MARKET_TZ)
+    return open_local.astimezone(timezone.utc)
+
+
+def _previous_trading_day(day: date) -> date:
+    candidate = day - timedelta(days=1)
+    while candidate.weekday() in _WEEKEND:
+        candidate -= timedelta(days=1)
+    return candidate

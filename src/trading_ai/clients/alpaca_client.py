@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Any
 
@@ -15,12 +16,13 @@ from alpaca.data.requests import (
 )
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, PositionIntent
 from loguru import logger
 
 from trading_ai.clients.base import APIClientError, BaseClient
 from trading_ai.settings import Settings
+from trading_ai.utils.dns import apply_dns_override
 
 
 class AlpacaClient(BaseClient):
@@ -30,6 +32,14 @@ class AlpacaClient(BaseClient):
         super().__init__("alpaca", {"mode": "paper"})
         self._settings = settings
         self._data_feed = self._resolve_data_feed(settings.alpaca_data_feed)
+        if settings.alpaca_data_override_ip:
+            apply_dns_override("data.alpaca.markets", settings.alpaca_data_override_ip)
+        verify_config: Any = True
+        if settings.alpaca_ca_bundle:
+            verify_config = settings.alpaca_ca_bundle
+        elif not settings.alpaca_verify_tls:
+            verify_config = False
+            os.environ.setdefault("PYTHONHTTPSVERIFY", "0")
         self._trading_client = TradingClient(
             api_key=settings.alpaca_api_key_id,
             secret_key=settings.alpaca_api_secret_key,
@@ -43,6 +53,7 @@ class AlpacaClient(BaseClient):
             api_key=settings.alpaca_api_key_id,
             secret_key=settings.alpaca_api_secret_key,
         )
+        self._configure_session_verify(verify_config)
 
     def fetch_option_chain(self, symbol: str, expiration: datetime | None = None) -> Any:
         """
@@ -129,6 +140,8 @@ class AlpacaClient(BaseClient):
         side: OrderSide,
         time_in_force: TimeInForce = TimeInForce.DAY,
         position_intent: PositionIntent = PositionIntent.BUY_TO_OPEN,
+        take_profit_price: float | None = None,
+        stop_loss_price: float | None = None,
     ) -> str:
         """Submit an options order via Alpaca's trading client."""
 
@@ -138,6 +151,8 @@ class AlpacaClient(BaseClient):
             side=side,
             time_in_force=time_in_force,
             position_intent=position_intent,
+            take_profit=TakeProfitRequest(limit_price=take_profit_price) if take_profit_price else None,
+            stop_loss=StopLossRequest(stop_price=stop_loss_price) if stop_loss_price else None,
         )
         try:
             response = self._trading_client.submit_order(order)
@@ -158,6 +173,14 @@ class AlpacaClient(BaseClient):
             raise APIClientError(f"Alpaca latest trade error: {exc}") from exc
         self._log("Fetched latest trade", symbol=symbol)
         return data
+
+    def _configure_session_verify(self, verify: Any) -> None:
+        for client in (self._option_client, self._equity_client, getattr(self, "_trading_client", None)):
+            if not client:
+                continue
+            session = getattr(client, "_session", None)
+            if session is not None:
+                session.verify = verify
 
     def _parse_timeframe(self, value: str | TimeFrame) -> TimeFrame:
         if isinstance(value, TimeFrame):
