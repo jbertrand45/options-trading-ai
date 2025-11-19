@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     alpaca_data_override_ip: str | None = Field(None, alias="ALPACA_DATA_OVERRIDE_IP")
     alpaca_ca_bundle: str | None = Field(None, alias="ALPACA_CA_BUNDLE")
     alpaca_verify_tls: bool = Field(True, alias="ALPACA_VERIFY_TLS")
+    alpaca_paper_account: bool = Field(True, alias="ALPACA_PAPER_ACCOUNT")
 
     polygon_api_key: str = Field(..., alias="POLYGON_API_KEY")
     polygon_base_url: str = Field("https://api.polygon.io", alias="POLYGON_BASE_URL")

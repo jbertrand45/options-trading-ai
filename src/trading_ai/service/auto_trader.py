@@ -47,6 +47,7 @@ class AutoTraderConfig:
     stream_force_refresh: bool = False
     stop_loss_fraction: float = 0.05
     take_profit_reward: float = 3.0
+    refresh_account_equity: bool = True
 
 
 @dataclass
@@ -91,6 +92,7 @@ class AutoTrader:
         self.log_path = Path(self.config.log_path).expanduser()
         self.snapshot_stream = snapshot_stream
         self._owns_stream = False
+        self.account_equity = self.config.account_equity
         if self.snapshot_stream is None and self.config.use_snapshot_stream:
             stream_config = SnapshotStreamConfig(
                 lookback_minutes=self.config.lookback_minutes,
@@ -113,6 +115,8 @@ class AutoTrader:
             news=self.config.news_hours,
             timeframe=self.config.timeframe,
         )
+        if self.config.refresh_account_equity:
+            self._update_account_equity()
         snapshot = self._fetch_snapshot()
         contexts = contexts_from_snapshot(snapshot)
         intents: List[TradeIntent] = []
@@ -169,7 +173,7 @@ class AutoTrader:
         spread = self._quote_spread(context, signal.direction)
         size = self.risk_manager.size_position(
             PositionSizingInput(
-                account_equity=self.config.account_equity,
+                account_equity=self.account_equity,
                 trade_risk_fraction=self.config.trade_risk_fraction,
                 contract_price=entry_price,
                 confidence=signal.confidence,
@@ -181,11 +185,13 @@ class AutoTrader:
         if size <= 0:
             return None
         stop_price = self.risk_manager.stop_loss_price(entry_price, self.config.stop_loss_fraction)
-        take_profit_price = self.risk_manager.take_profit_price(
-            entry_price,
-            reward_multiplier=self.config.take_profit_reward,
-            risk_fraction=self.config.stop_loss_fraction,
-        )
+        take_profit_price = signal.target_price
+        if take_profit_price is None:
+            take_profit_price = self.risk_manager.take_profit_price(
+                entry_price,
+                reward_multiplier=self.config.take_profit_reward,
+                risk_fraction=self.config.stop_loss_fraction,
+            )
         intent = TradeIntent(
             ticker=context.ticker,
             option_symbol=option_symbol,
@@ -201,8 +207,10 @@ class AutoTrader:
                 "option_agg_volume": agg_stats["volume"],
                 "option_agg_vwap": agg_vwap,
                 "option_spread": spread,
+                "signal_target_price": signal.target_price,
                 "stop_price": stop_price,
                 "take_profit_price": take_profit_price,
+                "account_equity": self.account_equity,
             },
         )
         return intent
@@ -362,6 +370,16 @@ class AutoTrader:
             use_cache=self.config.use_cache,
             include_news=self.config.include_news,
         )
+
+    def _update_account_equity(self) -> None:
+        try:
+            equity = float(self.alpaca.get_account_equity())
+        except Exception as exc:  # pragma: no cover - dependency failure path
+            logger.warning("Failed to refresh account equity; using last known value", error=str(exc))
+            return
+        if equity > 0:
+            self.account_equity = equity
+            logger.debug("Account equity refreshed", equity=equity)
 
 
 def _direction_to_side(direction: str):

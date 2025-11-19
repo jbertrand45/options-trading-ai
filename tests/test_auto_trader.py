@@ -24,6 +24,9 @@ class DummyAlpaca:
         self.calls.append(payload)
         return "order-xyz"
 
+    def get_account_equity(self) -> float:
+        return 1000.0
+
 
 class DummyStream:
     def __init__(self, snapshot):

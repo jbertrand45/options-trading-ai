@@ -29,7 +29,8 @@ class AlpacaClient(BaseClient):
     """Lightweight wrapper around Alpaca clients."""
 
     def __init__(self, settings: Settings) -> None:
-        super().__init__("alpaca", {"mode": "paper"})
+        mode = "paper" if settings.alpaca_paper_account else "live"
+        super().__init__("alpaca", {"mode": mode})
         self._settings = settings
         self._data_feed = self._resolve_data_feed(settings.alpaca_data_feed)
         if settings.alpaca_data_override_ip:
@@ -43,7 +44,7 @@ class AlpacaClient(BaseClient):
         self._trading_client = TradingClient(
             api_key=settings.alpaca_api_key_id,
             secret_key=settings.alpaca_api_secret_key,
-            paper=True,
+            paper=settings.alpaca_paper_account,
         )
         self._option_client = OptionHistoricalDataClient(
             api_key=settings.alpaca_api_key_id,
@@ -161,6 +162,22 @@ class AlpacaClient(BaseClient):
             raise APIClientError(f"Alpaca option order error: {exc}") from exc
         self._log("Submitted option order", symbol=symbol, side=side.value, qty=quantity)
         return response.id
+
+    def get_account_equity(self) -> float:
+        """Return the latest account equity reported by Alpaca."""
+
+        try:
+            account = self._trading_client.get_account()
+        except Exception as exc:  # pragma: no cover - network failure path
+            logger.exception("Failed to fetch Alpaca account equity")
+            raise APIClientError(f"Alpaca account equity error: {exc}") from exc
+        equity = getattr(account, "equity", None)
+        if equity is None:
+            raise APIClientError("Alpaca account did not include equity field")
+        try:
+            return float(equity)
+        except (TypeError, ValueError) as exc:
+            raise APIClientError(f"Invalid equity value returned by Alpaca: {equity}") from exc
 
     def fetch_latest_trade(self, symbol: str) -> Any:
         """Fetch the most recent trade for a stock."""

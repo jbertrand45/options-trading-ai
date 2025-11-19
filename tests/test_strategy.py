@@ -126,6 +126,33 @@ def test_momentum_iv_strategy_uses_option_aggregates() -> None:
     assert signal.metadata["option_agg_momentum"] > 0
 
 
+def test_momentum_iv_strategy_sets_target_price_from_confidence() -> None:
+    strategy = MomentumIVStrategy()
+    context = StrategyContext(
+        ticker="AAPL",
+        underlying_bars=pd.DataFrame(
+            [
+                {"timestamp": 1, "close": 100.0},
+                {"timestamp": 2, "close": 101.5},
+                {"timestamp": 3, "close": 102.0},
+            ]
+        ),
+        option_chain={},
+        option_metrics={},
+        option_quote={"CALL": {"bid": 2.0, "ask": 2.2}},
+        news_items=[],
+        features={"momentum_15": 0.03},
+        option_aggregates={"CALL": [{"close": 1.0}, {"close": 1.3}]},
+    )
+
+    signal = strategy.generate_signal(context)
+
+    assert signal.target_price is not None
+    assert signal.entry_price is not None
+    assert signal.target_price > signal.entry_price
+    assert signal.metadata["target_return_pct"] >= strategy.config.min_target_return
+
+
 def test_momentum_iv_strategy_blocks_direction_when_theta_drag_high() -> None:
     strategy = MomentumIVStrategy(MomentumIVConfig(max_theta_magnitude=0.2))
     context = StrategyContext(

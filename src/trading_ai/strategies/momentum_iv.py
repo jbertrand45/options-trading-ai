@@ -33,6 +33,8 @@ class MomentumIVConfig:
     theta_health_scale: float = 0.25
     vega_weight: float = 0.1
     theta_weight: float = 0.1
+    min_target_return: float = 0.05
+    max_target_return: float = 0.2
 
 
 class MomentumIVStrategy(TradingStrategy):
@@ -99,6 +101,20 @@ class MomentumIVStrategy(TradingStrategy):
             return bid
         return (bid + ask) / 2
 
+    def _quote_for_direction(self, option_quote: Optional[Dict[str, Any]], direction: str) -> Optional[Dict[str, Any]]:
+        if not isinstance(option_quote, dict):
+            return None
+        direction = direction.upper()
+        candidates = [
+            option_quote.get(direction),
+            option_quote.get(direction.capitalize()),
+            option_quote.get(direction.lower()),
+        ]
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                return candidate
+        return None
+
     def _momentum_from_option_aggregates(self, option_aggregates: Optional[Dict[str, Any]]) -> float:
         if not isinstance(option_aggregates, dict):
             return 0.0
@@ -156,6 +172,13 @@ class MomentumIVStrategy(TradingStrategy):
         if start == 0:
             return 0.0
         return (end - start) / start
+
+    def _target_return_pct(self, confidence: float) -> float:
+        span = max(self.config.max_target_return - self.config.min_target_return, 0.0)
+        denom = max(self.config.max_confidence - self.config.baseline_confidence, 1e-6)
+        normalized = (confidence - self.config.baseline_confidence) / denom
+        normalized = max(0.0, min(normalized, 1.0))
+        return self.config.min_target_return + span * normalized
 
     def _extract_iv_metrics(self, option_chain: Dict, option_metrics: Dict[str, Any] | None = None) -> Dict[str, float]:
         if not option_chain:
@@ -437,6 +460,14 @@ class MomentumIVStrategy(TradingStrategy):
                 "theta_bias": flow_metrics["theta_bias"],
             },
         )
+        entry_quote = self._quote_for_direction(context.option_quote, direction)
+        entry_price = self._quote_mid(entry_quote)
+        if entry_price:
+            signal.entry_price = entry_price
+        if direction != "NONE" and entry_price:
+            target_return_pct = self._target_return_pct(confidence)
+            signal.target_price = entry_price * (1 + target_return_pct)
+            signal.metadata["target_return_pct"] = target_return_pct
         return signal
 
     def _passes_greek_filters(self, direction: str, flow_metrics: Dict[str, float]) -> bool:
