@@ -22,6 +22,8 @@ class DummyAlpaca:
     def __init__(self) -> None:
         self.bar_calls = 0
         self.chain_calls = 0
+        self.option_bar_calls = 0
+        self.trade_calls = 0
 
     def fetch_underlying_bars(self, **_: Any) -> DummyBars:
         self.bar_calls += 1
@@ -34,63 +36,37 @@ class DummyAlpaca:
             "AAPL251107C00100000": {
                 "symbol": "AAPL251107C00100000",
                 "latest_quote": {"bid_price": 1.2, "ask_price": 1.4},
+                "open_interest": 120,
+                "implied_volatility": 0.25,
+                "greeks": {"delta": 0.5, "vega": 0.1, "theta": -0.02},
             },
             "AAPL251107C00110000": {
                 "symbol": "AAPL251107C00110000",
                 "latest_quote": {"bid_price": 0.9, "ask_price": 1.05},
+                "open_interest": 90,
+                "implied_volatility": 0.22,
             },
             "AAPL251107P00100000": {
                 "symbol": "AAPL251107P00100000",
                 "latest_quote": {"bid_price": 0.8, "ask_price": 0.95},
+                "open_interest": 80,
+                "implied_volatility": 0.28,
+                "greeks": {"delta": -0.5, "vega": 0.12, "theta": -0.03},
             },
             "AAPL251107P00110000": {
                 "symbol": "AAPL251107P00110000",
                 "latest_quote": {"bid_price": 1.4, "ask_price": 1.55},
+                "open_interest": 60,
+                "implied_volatility": 0.3,
             },
         }
 
     def fetch_latest_trade(self, **_: Any) -> Dict[str, Any]:
+        self.trade_calls += 1
         return {"trade": {"timestamp": "2025-11-06T16:00:00Z", "price": 101.0, "size": 5}}
 
-
-class DummyPolygon:
-    def __init__(self) -> None:
-        self.calls = 0
-        self.bar_calls = 0
-        self.contract_calls = 0
-        self.agg_calls = 0
-
-    def fetch_reference_news(self, **_: Any) -> Iterable[Dict[str, Any]]:
-        self.calls += 1
-        yield {"title": "Tech stock rallies", "source": "Polygon"}
-
-    def fetch_equity_bars(self, **_: Any) -> Iterable[Dict[str, Any]]:
-        self.bar_calls += 1
-        return [{"timestamp": 1, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5, "volume": 1000}]
-
-    def fetch_option_contracts(self, *args: Any, **kwargs: Any) -> Iterable[Dict[str, Any]]:
-        self.contract_calls += 1
-        return [
-            {
-                "ticker": "AAPL251107C00100000",
-                "contract_type": "call",
-                "strike_price": 100.0,
-                "implied_volatility": 0.25,
-                "open_interest": 120,
-                "greeks": {"delta": 0.5, "gamma": 0.1},
-            },
-            {
-                "ticker": "AAPL251107P00100000",
-                "contract_type": "put",
-                "strike_price": 100.0,
-                "implied_volatility": 0.28,
-                "open_interest": 80,
-                "greeks": {"delta": -0.5, "gamma": 0.1},
-            },
-        ]
-
-    def fetch_option_aggregates(self, *args: Any, **kwargs: Any) -> Iterable[Dict[str, Any]]:
-        self.agg_calls += 1
+    def fetch_option_bars(self, **_: Any) -> Iterable[Dict[str, Any]]:
+        self.option_bar_calls += 1
         return [
             {
                 "timestamp": 1,
@@ -99,6 +75,7 @@ class DummyPolygon:
                 "low": 0.9,
                 "close": 1.1,
                 "volume": 250,
+                "vwap": 1.1,
             }
         ]
 
@@ -116,7 +93,6 @@ class DummyAggregator:
 class EmptyBarsAlpaca(DummyAlpaca):
     def __init__(self) -> None:
         super().__init__()
-        self.trade_calls = 0
 
     def fetch_underlying_bars(self, **_: Any) -> DummyBars:
         self.bar_calls += 1
@@ -127,33 +103,25 @@ class EmptyBarsAlpaca(DummyAlpaca):
         return {"trade": {"timestamp": "2025-11-06T16:05:00Z", "price": 100.5, "size": 10}}
 
 
-class EmptyPolygon(DummyPolygon):
-    def fetch_equity_bars(self, **_: Any) -> Iterable[Dict[str, Any]]:
-        self.bar_calls += 1
-        return []
-
-
 class FailingAlpaca(DummyAlpaca):
     def fetch_option_chain(self, **_: Any):
         raise APIClientError("chain down")
 
-    def fetch_option_metrics(self, **_: Any):
-        raise APIClientError("metrics down")
+    def fetch_option_bars(self, **_: Any):
+        raise APIClientError("bars down")
 
 
-class FailingPolygonAgg(DummyPolygon):
-    def fetch_option_aggregates(self, *args: Any, **kwargs: Any) -> Iterable[Dict[str, Any]]:
+class FailingOptionBars(DummyAlpaca):
+    def fetch_option_bars(self, **_: Any) -> Iterable[Dict[str, Any]]:
         raise APIClientError("agg down")
 
 
-def build_settings(monkeypatch: pytest.MonkeyPatch, *, use_polygon_bars: bool = True, enable_option_aggregates: bool = True) -> Settings:
+def build_settings(monkeypatch: pytest.MonkeyPatch, *, enable_option_aggregates: bool = True) -> Settings:
     monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
-    monkeypatch.setenv("POLYGON_API_KEY", "polygon")
     monkeypatch.setenv("NEWS_API_KEY", "news")
     monkeypatch.setenv("NEWS_SECRET_KEY", "secret")
     monkeypatch.setenv("TARGET_TICKERS", '["AAPL"]')
-    monkeypatch.setenv("USE_POLYGON_BARS", "1" if use_polygon_bars else "0")
     monkeypatch.setenv("ENABLE_OPTION_AGGREGATES", "1" if enable_option_aggregates else "0")
     monkeypatch.setenv("USE_ALPACA_OPTION_CHAIN", "1")
     if "ENABLE_UNDERLYING_BARS" not in os.environ:
@@ -165,14 +133,12 @@ def test_market_data_collector_uses_cache(tmp_path, monkeypatch: pytest.MonkeyPa
     settings = build_settings(monkeypatch)
     cache = LocalDataCache(root=tmp_path / "cache")
     alpaca = DummyAlpaca()
-    polygon = DummyPolygon()
     aggregator = DummyAggregator()
 
     collector = MarketDataCollector(
         settings,
         cache=cache,
         alpaca_client=alpaca,  # type: ignore[arg-type]
-        polygon_client=polygon,  # type: ignore[arg-type]
         aggregator=aggregator,  # type: ignore[arg-type]
     )
 
@@ -185,7 +151,7 @@ def test_market_data_collector_uses_cache(tmp_path, monkeypatch: pytest.MonkeyPa
     )
 
     assert "AAPL" in result
-    assert polygon.bar_calls == 1
+    assert alpaca.bar_calls == 1
     assert alpaca.chain_calls == 1
     assert aggregator.calls == 1
     assert not result["AAPL"]["underlying_bars"].empty
@@ -199,7 +165,7 @@ def test_market_data_collector_uses_cache(tmp_path, monkeypatch: pytest.MonkeyPa
         use_cache=True,
     )
 
-    assert alpaca.bar_calls == 0
+    assert alpaca.bar_calls == 1
     assert alpaca.chain_calls == 1
     assert aggregator.calls == 1
     assert len(result_second["AAPL"]["news"]) == 1  # cached stories
@@ -212,7 +178,6 @@ def test_market_data_collector_selects_reference_quotes(tmp_path, monkeypatch: p
         settings,
         cache=cache,
         alpaca_client=DummyAlpaca(),  # type: ignore[arg-type]
-        polygon_client=DummyPolygon(),  # type: ignore[arg-type]
         aggregator=DummyAggregator(),  # type: ignore[arg-type]
     )
 
@@ -231,15 +196,13 @@ def test_market_data_collector_selects_reference_quotes(tmp_path, monkeypatch: p
 
 
 def test_market_data_collector_falls_back_to_latest_trade(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = build_settings(monkeypatch, use_polygon_bars=False)
+    settings = build_settings(monkeypatch)
     cache = LocalDataCache(root=tmp_path / "cache")
     alpaca = EmptyBarsAlpaca()
-    polygon = EmptyPolygon()
     collector = MarketDataCollector(
         settings,
         cache=cache,
         alpaca_client=alpaca,  # type: ignore[arg-type]
-        polygon_client=polygon,  # type: ignore[arg-type]
         aggregator=DummyAggregator(),  # type: ignore[arg-type]
     )
 
@@ -264,7 +227,6 @@ def test_market_data_collector_collects_option_metrics(tmp_path, monkeypatch: py
         settings,
         cache=cache,
         alpaca_client=DummyAlpaca(),  # type: ignore[arg-type]
-        polygon_client=DummyPolygon(),  # type: ignore[arg-type]
         aggregator=DummyAggregator(),  # type: ignore[arg-type]
     )
 
@@ -279,17 +241,17 @@ def test_market_data_collector_collects_option_metrics(tmp_path, monkeypatch: py
     metrics = result["AAPL"]["option_metrics"]
     assert "AAPL251107C00100000" in metrics
     assert metrics["AAPL251107C00100000"]["implied_volatility"] == pytest.approx(0.25)
+    assert metrics["AAPL251107C00100000"]["open_interest"] == 120
 
 
 def test_market_data_collector_fetches_option_aggregates(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = build_settings(monkeypatch)
     cache = LocalDataCache(root=tmp_path / "cache")
-    polygon = DummyPolygon()
+    alpaca = DummyAlpaca()
     collector = MarketDataCollector(
         settings,
         cache=cache,
-        alpaca_client=DummyAlpaca(),  # type: ignore[arg-type]
-        polygon_client=polygon,  # type: ignore[arg-type]
+        alpaca_client=alpaca,  # type: ignore[arg-type]
         aggregator=DummyAggregator(),  # type: ignore[arg-type]
     )
 
@@ -304,17 +266,16 @@ def test_market_data_collector_fetches_option_aggregates(tmp_path, monkeypatch: 
     aggs = result["AAPL"]["option_aggregates"]
     assert "CALL" in aggs
     assert aggs["CALL"][0]["close"] == pytest.approx(1.1)
-    assert polygon.agg_calls >= 1
+    assert alpaca.option_bar_calls >= 1
 
 
 def test_option_aggregates_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = build_settings(monkeypatch, enable_option_aggregates=False)
-    polygon = DummyPolygon()
+    alpaca = DummyAlpaca()
     collector = MarketDataCollector(
         settings,
         cache=LocalDataCache(),
-        alpaca_client=DummyAlpaca(),  # type: ignore[arg-type]
-        polygon_client=polygon,  # type: ignore[arg-type]
+        alpaca_client=alpaca,  # type: ignore[arg-type]
         aggregator=DummyAggregator(),  # type: ignore[arg-type]
     )
 
@@ -331,17 +292,16 @@ def test_option_aggregates_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
     assert aggregates == {}
-    assert polygon.agg_calls == 0
+    assert alpaca.option_bar_calls == 0
 
 
-def test_option_quote_falls_back_to_polygon_metrics(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_option_quote_falls_back_to_option_metrics(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = build_settings(monkeypatch)
     cache = LocalDataCache(root=tmp_path / "cache")
     collector = MarketDataCollector(
         settings,
         cache=cache,
         alpaca_client=DummyAlpaca(),  # type: ignore[arg-type]
-        polygon_client=DummyPolygon(),  # type: ignore[arg-type]
         aggregator=DummyAggregator(),  # type: ignore[arg-type]
     )
     bars = pd.DataFrame({"close": [100.0, 101.0]})
@@ -365,7 +325,7 @@ def test_option_quote_falls_back_to_polygon_metrics(tmp_path, monkeypatch: pytes
     quotes = collector.collect_option_quote("AAPL", option_chain=None, option_metrics=metrics, bars=bars)
 
     assert set(quotes.keys()) == {"CALL", "PUT"}
-    assert quotes["CALL"]["source"] == "polygon"
+    assert quotes["CALL"]["source"] == "alpaca"
     assert quotes["PUT"]["symbol"] == "AAPL251107P00100000"
 
 
@@ -376,7 +336,6 @@ def test_collect_market_snapshot_handles_option_chain_failure(tmp_path, monkeypa
         settings,
         cache=cache,
         alpaca_client=FailingAlpaca(),  # type: ignore[arg-type]
-        polygon_client=DummyPolygon(),  # type: ignore[arg-type]
         aggregator=DummyAggregator(),  # type: ignore[arg-type]
     )
 
@@ -397,8 +356,7 @@ def test_collect_market_snapshot_handles_option_aggregate_failure(tmp_path, monk
     collector = MarketDataCollector(
         settings,
         cache=cache,
-        alpaca_client=DummyAlpaca(),  # type: ignore[arg-type]
-        polygon_client=FailingPolygonAgg(),  # type: ignore[arg-type]
+        alpaca_client=FailingOptionBars(),  # type: ignore[arg-type]
         aggregator=DummyAggregator(),  # type: ignore[arg-type]
     )
 
@@ -422,7 +380,6 @@ def test_market_data_collector_skips_underlying_bars_when_disabled(tmp_path, mon
         settings,
         cache=cache,
         alpaca_client=alpaca,  # type: ignore[arg-type]
-        polygon_client=DummyPolygon(),  # type: ignore[arg-type]
         aggregator=DummyAggregator(),  # type: ignore[arg-type]
     )
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 
 import feedparser
 from loguru import logger
@@ -17,7 +17,7 @@ class YahooNewsClient(BaseClient):
     def __init__(self) -> None:
         super().__init__("yahoo_rss")
 
-    def fetch_headlines(self, ticker: str, *, since: datetime | None = None, limit: int = 50) -> List[Dict[str, Any]]:
+    def fetch_headlines(self, ticker: str, *, since: Optional[datetime] = None, limit: int = 50) -> List[Dict[str, Any]]:
         feed_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
         try:
             parsed = feedparser.parse(feed_url)

@@ -66,13 +66,14 @@ Load it via `launchctl load ~/Library/LaunchAgents/tradingai.autotrader.plist`. 
 
 Environment overrides you can set before invoking `scripts/run_auto_trader.sh` (or in your launchd plist):
 
-- `MIN_OPTION_AGG_BARS` – require the Polygon tape to provide at least this many minute bars (e.g., `20`).
+- `MIN_OPTION_AGG_BARS` – require Alpaca option bars to provide at least this many minute bars (e.g., `20`).
 - `MIN_OPTION_AGG_VOLUME` – minimum cumulative volume across those bars (helps filter illiquid contracts).
 - `MIN_OPTION_AGG_VWAP` – minimum absolute VWAP trend (e.g., `0.02` forces ≥2% VWAP drift in favor of the trade).
 - `MAX_OPTION_SPREAD_PCT` – skip trades when the bid/ask spread exceeds this fraction of the option price (e.g., `0.35` keeps fills away from wide markets).
 - `MIN_OPTION_LIQUIDITY` – require at least this much recent option volume before the risk manager allocates capital.
 - `AUTO_USE_SNAPSHOT_STREAM` – set to `1` to keep a rolling snapshot warm between cycles; combine with `AUTO_STREAM_INTERVAL_SECONDS` (default `60`) and `AUTO_STREAM_FORCE_REFRESH=1` if you want each loop to collect fresh data regardless of the cached snapshot.
-- `ENABLE_OPTION_AGGREGATES` – set to `0` if your Polygon/Massive plan doesn’t include option aggregates so the collector skips those calls (reduces noise from repeated authorization errors).
+- `ENABLE_OPTION_AGGREGATES` – set to `0` if you want to skip Alpaca option bar requests and trade from chains/quotes only (reduces API usage).
+- `AUTO_USE_LIVE_STREAM` – set to `1` to attach Alpaca's live bar stream so snapshots are enriched with real-time prices between full refreshes.
 
 All of these knobs can live in `.env` so manual `auto-trade` runs inherit the same tape-health filters even when you skip the helper script.
 

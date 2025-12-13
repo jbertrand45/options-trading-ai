@@ -10,7 +10,7 @@
 
 ### 2. Data Strategy
 - **Core provider:** Alpaca Market Data v2 (options beta) for historical and streaming options chains, implied volatility, and underlying prices. Implement rate-limit-aware caching to stay within free-tier quotas.
-- **Supplemental market data:** Polygon.io for extended historical coverage, Greeks, and intraday bars; FRED macro series and VIX futures (CBOE) for regime features; curated news sentiment aggregated from Polygon reference news, Yahoo Finance RSS, Alpha Vantage, Marketaux, and NewsAPI (whichever keys are supplied).
+- **Supplemental market data:** FRED macro series and VIX futures (CBOE) for regime features; curated news sentiment aggregated from Yahoo Finance RSS, Alpha Vantage, Marketaux, and NewsAPI (whichever keys are supplied).
 - Secure API credentials via `.env` during development and a secrets manager in production deployments.
 
 ### 3. Execution Path
@@ -45,7 +45,7 @@
 ### 7. Development Roadmap
 1. Confirm market universe, trade cadence, capital allocation, and acceptable drawdown thresholds.
 2. Set up Python project scaffold (Poetry env, linting, CI hooks). Document secrets handling.
-3. Build Alpaca/Polygon/news ingestion module with local caching, schema validation, and fallback to secondary feeds.
+3. Build Alpaca/news ingestion module with local caching, schema validation, and fallback to secondary feeds.
 4. Assemble exploratory notebooks to profile options chains, feature distributions, and label definitions (entry/exit, expected value).
 5. Implement baseline models + backtest harness; iterate on features, calibration, and decision thresholds.
 6. Add risk metrics, walk-forward validation, and scenario testing (stress, Monte Carlo, tail risk).
@@ -54,7 +54,7 @@
 9. Harden deployment, add alerting, integrate with live Alpaca account once performance targets hold.
 
 **Immediate engineering milestones**
-- Expand Alpaca/Polygon/news ingestion workflow with retry logic, smarter cache invalidation, and schema normalization tuned to intraday horizons.
+- Expand Alpaca/news ingestion workflow with retry logic, smarter cache invalidation, and schema normalization tuned to intraday horizons.
 - Implement modular strategy framework (feature extraction, signal scoring, risk manager, execution policy) and integrate with a lightweight backtester calibrated to $150 initial capital.
 - Develop simulation scenarios (Monte Carlo path resampling, stress tests) to gauge probability of hitting 10% daily targets under realistic slippage/commission assumptions.
 - Stand up feature store scaffolding (DuckDB/Parquet) and baseline technical indicator generation.

@@ -12,7 +12,7 @@ def apply_dns_override(hostname: str, override_ip: str) -> None:
     """
     Force socket.getaddrinfo to return a specific IP for a hostname.
 
-    Useful when the system resolver cannot look up api.polygon.io but we can
+    Useful when the system resolver cannot reach a market-data host but we can
     still reach it via a known IP (e.g., from nslookup or dig).
     """
 
@@ -31,8 +31,8 @@ def apply_dns_override(hostname: str, override_ip: str) -> None:
             socket._dns_overrides = overrides  # type: ignore[attr-defined]
 
             def _patched_getaddrinfo(
-                host: str | None,
-                port: int | str | None,
+                host: Optional[str],
+                port: int | Optional[str],
                 family: int = 0,
                 socktype: int = 0,
                 proto: int = 0,
@@ -57,7 +57,7 @@ def apply_dns_override(hostname: str, override_ip: str) -> None:
         overrides[normalized_host] = normalized_ip
 
 
-def _normalize_port(port: int | str | None) -> int:
+def _normalize_port(port: int | Optional[str]) -> int:
     if port is None:
         return 0
     if isinstance(port, int):

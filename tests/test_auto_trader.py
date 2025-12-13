@@ -27,6 +27,9 @@ class DummyAlpaca:
     def get_account_equity(self) -> float:
         return 1000.0
 
+    def option_is_tradable(self, symbol: str) -> bool:  # pragma: no cover - trivial stub
+        return True
+
 
 class DummyStream:
     def __init__(self, snapshot):
@@ -50,7 +53,6 @@ class FailingStream(DummyStream):
 def build_settings(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
-    monkeypatch.setenv("POLYGON_API_KEY", "polygon")
     return Settings()
 
 
@@ -192,6 +194,7 @@ def test_auto_trader_respects_option_aggregate_threshold(monkeypatch, tmp_path):
             min_option_agg_bars=5,
             min_option_agg_volume=10.0,
             min_option_agg_vwap=0.0,
+            enable_option_aggregates=True,
         ),
     )
 
@@ -233,6 +236,7 @@ def test_auto_trader_respects_option_agg_vwap(monkeypatch, tmp_path):
             account_equity=1000.0,
             log_path=tmp_path / "auto.log",
             min_option_agg_vwap=0.05,
+            enable_option_aggregates=True,
         ),
     )
 

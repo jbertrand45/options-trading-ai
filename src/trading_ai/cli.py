@@ -72,6 +72,8 @@ def command_auto_trade(args: argparse.Namespace) -> None:
     use_snapshot_stream = (
         settings.auto_use_snapshot_stream if args.use_snapshot_stream is None else args.use_snapshot_stream
     )
+    use_live_stream_arg = getattr(args, "use_live_stream", None)
+    use_live_stream = settings.auto_use_live_stream if use_live_stream_arg is None else use_live_stream_arg
     stream_interval = (
         args.stream_interval if args.stream_interval is not None else settings.auto_stream_interval_seconds
     )
@@ -87,6 +89,16 @@ def command_auto_trade(args: argparse.Namespace) -> None:
     min_option_agg_vwap = (
         args.min_option_agg_vwap if args.min_option_agg_vwap is not None else settings.min_option_agg_vwap
     )
+    max_option_spread_pct = (
+        args.max_option_spread_pct if args.max_option_spread_pct is not None else settings.max_option_spread_pct
+    )
+    stop_loss_fraction = (
+        args.stop_loss_fraction if args.stop_loss_fraction is not None else settings.auto_stop_loss_fraction
+    )
+    take_profit_reward = (
+        args.take_profit_reward if args.take_profit_reward is not None else settings.auto_take_profit_reward
+    )
+    order_mode = args.option_order_mode or settings.auto_order_mode
     config = AutoTraderConfig(
         lookback_minutes=args.lookback_minutes,
         news_hours=args.news_hours,
@@ -102,16 +114,22 @@ def command_auto_trade(args: argparse.Namespace) -> None:
         min_option_agg_bars=min_option_agg_bars,
         min_option_agg_volume=min_option_agg_volume,
         min_option_agg_vwap=min_option_agg_vwap,
-        max_option_spread_pct=args.max_option_spread_pct,
+        max_option_spread_pct=max_option_spread_pct,
         min_option_liquidity=args.min_option_liquidity,
         use_snapshot_stream=use_snapshot_stream,
+        use_live_stream=use_live_stream,
         stream_interval_seconds=stream_interval,
         stream_force_refresh=stream_force_refresh,
+        option_order_mode=order_mode,
+        enable_option_aggregates=settings.enable_option_aggregates,
+        stop_loss_fraction=stop_loss_fraction,
+        take_profit_reward=take_profit_reward,
     )
     risk_manager = RiskManager(
         min_confidence=min_conf,
         max_spread_pct=config.max_option_spread_pct,
         min_liquidity=config.min_option_liquidity,
+        max_daily_loss_pct=config.trade_risk_fraction,
     )
     trader = AutoTrader(
         settings,
@@ -160,33 +178,45 @@ def build_parser() -> argparse.ArgumentParser:
     auto.add_argument("--max-positions", type=int, default=None, help="Maximum contracts per trade.")
     auto.add_argument("--account-equity", type=float, default=None, help="Account equity for sizing calculations.")
     auto.add_argument(
+        "--stop-loss-fraction",
+        type=float,
+        default=None,
+        help="Fractional stop-loss per trade (e.g., 0.03 = 3% below entry).",
+    )
+    auto.add_argument(
+        "--take-profit-reward",
+        type=float,
+        default=None,
+        help="Reward multiple of risk to set take-profit (e.g., 2.5 => 2.5R).",
+    )
+    auto.add_argument(
         "--min-option-agg-bars",
         type=int,
         default=None,
-        help="Minimum number of Polygon option aggregate bars required.",
+        help="Minimum number of Alpaca option bars required.",
     )
     auto.add_argument(
         "--min-option-agg-volume",
         type=float,
         default=None,
-        help="Minimum summed volume across Polygon option aggregates.",
+        help="Minimum summed volume across Alpaca option aggregates.",
     )
     auto.add_argument(
         "--min-option-agg-vwap",
         type=float,
         default=None,
-        help="Minimum absolute VWAP trend required from Polygon option aggregates.",
+        help="Minimum absolute VWAP trend required from Alpaca option aggregates.",
     )
     auto.add_argument(
         "--max-option-spread-pct",
         type=float,
-        default=0.35,
+        default=None,
         help="Maximum bid/ask spread (fraction of option price) allowed when sizing trades.",
     )
     auto.add_argument(
         "--min-option-liquidity",
         type=float,
-        default=25.0,
+        default=50.0,
         help="Minimum cumulative option volume required to allocate capital.",
     )
     auto.add_argument(
@@ -208,6 +238,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maintain a rolling snapshot between cycles instead of collecting every run.",
     )
     auto.add_argument(
+        "--use-live-stream",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable Alpaca live bar stream to enrich snapshots between cycles.",
+    )
+    auto.add_argument(
         "--stream-interval",
         type=float,
         default=None,
@@ -219,9 +255,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Force a fresh snapshot each cycle even when the stream has cached data.",
     )
+    auto.add_argument(
+        "--option-order-mode",
+        choices=["long", "cash_secured", "auto"],
+        default=None,
+        help="Order style: long buys, cash-secured/covered sells, or auto fallback.",
+    )
     auto.add_argument("--loop", action="store_true", help="Continuously run until interrupted.")
     auto.add_argument("--interval", type=int, default=None, help="Sleep seconds between loops when --loop is set.")
-    auto.add_argument("--live", action="store_true", help="Submit live orders (WARNING: option execution not yet wired).")
+    auto.add_argument("--live", action="store_true", help="Submit live orders (WARNING: real capital at risk, test with paper trading first).")
     auto.set_defaults(func=command_auto_trade)
 
     return parser

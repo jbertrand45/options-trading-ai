@@ -9,9 +9,8 @@
 ### Data Inputs
 | Source  | Purpose | Notes |
 |---------|---------|-------|
-| Alpaca  | Execution, option chains, latest quotes | Live/paper trading and baseline data. |
-| Polygon/Massive | Historical chains, Greeks, intraday bars, open interest | Options Developer tier now wired in; cache aggressively and leverage new greeks/OI payload. |
-| Polygon News + Yahoo RSS + Alpha Vantage + Marketaux + NewsAPI | Intraday catalysts & sentiment ensemble | Aggregated to boost coverage and reduce dependency on any single feed (resolve DNS/auth for Massive/NewsAPI before enabling). |
+| Alpaca  | Execution, option chains, latest quotes, option bars | Live/paper trading and baseline data. |
+| Yahoo RSS + Alpha Vantage + Marketaux + NewsAPI | Intraday catalysts & sentiment ensemble | Aggregated to boost coverage and reduce dependency on any single feed (configure whichever keys are available). |
 
 ### Signal Stack
 1. **Feature extraction** (`trading_ai.features`):
@@ -31,7 +30,7 @@
 
 ### Development Roadmap
 1. **Data readiness**
-   - Finish robust Alpaca/Polygon connectors with retry, rate-limit awareness, and DuckDB/Parquet storage (if quotas allow).
+   - Harden Alpaca data connectors with retry, rate-limit awareness, and DuckDB/Parquet storage (if quotas allow).
    - Expand `compute_intraday_features` to include Greeks skew, VWAP deviations, and volume imbalance.
 2. **Model iterations**
    - Prototype `MomentumIVStrategy` on cached data; calibrate thresholds to achieve win-rate >=60% and avg R:R ≥1.5.

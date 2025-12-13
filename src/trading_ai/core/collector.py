@@ -15,7 +15,6 @@ from trading_ai.clients import (
     MarketauxClient,
     NewsAggregator,
     NewsClient,
-    PolygonClient,
     YahooNewsClient,
 )
 from trading_ai.clients.base import APIClientError
@@ -32,16 +31,13 @@ class MarketDataCollector:
         *,
         cache: Optional[LocalDataCache] = None,
         alpaca_client: Optional[AlpacaClient] = None,
-        polygon_client: Optional[PolygonClient] = None,
         news_client: Optional[NewsClient] = None,
         aggregator: Optional[NewsAggregator] = None,
     ) -> None:
         self.settings = settings
         self.cache = cache or LocalDataCache()
         self.alpaca = alpaca_client or AlpacaClient(settings)
-        self.polygon = polygon_client or PolygonClient(settings)
         self.enable_news = settings.enable_news
-        self.use_polygon_bars = settings.use_polygon_bars
         self.enable_underlying_bars = settings.enable_underlying_bars
         self.use_alpaca_option_chain = settings.use_alpaca_option_chain
 
@@ -58,7 +54,6 @@ class MarketDataCollector:
             else None
         )
         self.aggregator = aggregator or NewsAggregator(
-            polygon_client=self.polygon,
             news_api_client=base_news_client,
             yahoo_client=yahoo_client,
             alpha_client=alpha_client,
@@ -86,6 +81,8 @@ class MarketDataCollector:
     def _serialize_payload(self, payload: Any) -> Any:
         if payload is None:
             return None
+        if isinstance(payload, pd.DataFrame):
+            return payload.to_dict(orient="records")
         if isinstance(payload, (str, int, float, bool)):
             return payload
         if isinstance(payload, list):
@@ -118,45 +115,12 @@ class MarketDataCollector:
             return self.cache.read_dataframe(*cache_key)
 
         frame = pd.DataFrame()
-        if self.use_polygon_bars:
-            try:
-                frame = self._frame_from_payload(
-                    self.polygon.fetch_equity_bars(
-                        ticker=ticker,
-                        start=start,
-                        end=end,
-                        timeframe=_polygon_timespan(timeframe),
-                    )
-                )
-            except APIClientError as exc:
-                logger.warning(
-                    "Polygon equity bars unavailable; falling back to Alpaca",
-                    ticker=ticker,
-                    error=str(exc),
-                )
-                # Avoid hammering Polygon with repeated unauthorized requests in the same run.
-                self.use_polygon_bars = False
-
-        if frame.empty:
-            try:
-                alpaca_bars = self.alpaca.fetch_underlying_bars(symbol=ticker, start=start, end=end, timeframe=timeframe)
-                frame = self._frame_from_payload(alpaca_bars)
-            except APIClientError:
-                logger.warning("Alpaca equity bars unavailable", ticker=ticker)
-                frame = pd.DataFrame()
-        if frame.empty and not self.use_polygon_bars:
-            try:
-                frame = self._frame_from_payload(
-                    self.polygon.fetch_equity_bars(
-                        ticker=ticker,
-                        start=start,
-                        end=end,
-                        timeframe=_polygon_timespan(timeframe),
-                    )
-                )
-                logger.info("Polygon fallback delivered equity bars", ticker=ticker)
-            except APIClientError:
-                logger.warning("Polygon fallback failed", ticker=ticker)
+        try:
+            alpaca_bars = self.alpaca.fetch_underlying_bars(symbol=ticker, start=start, end=end, timeframe=timeframe)
+            frame = self._frame_from_payload(alpaca_bars)
+        except APIClientError:
+            logger.warning("Alpaca equity bars unavailable", ticker=ticker)
+            frame = pd.DataFrame()
         if frame.empty:
             frame = self._frame_from_latest_trade(ticker)
         if not frame.empty:
@@ -192,39 +156,23 @@ class MarketDataCollector:
         self,
         ticker: str,
         *,
+        option_chain: Optional[Any] = None,
         use_cache: bool = True,
     ) -> Dict[str, Any]:
-        cache_key = ("polygon", "option-metrics", ticker, datetime.utcnow().date().isoformat())
+        cache_key = ("alpaca", "option-metrics", ticker, datetime.utcnow().date().isoformat())
         if use_cache and self.cache.exists(*cache_key, suffix=".json"):
             return self.cache.read_json(*cache_key)
 
-        try:
-            contracts = self.polygon.fetch_option_contracts(
-                ticker,
-                limit=self.settings.option_metrics_limit,
-                as_of=datetime.utcnow(),
-            )
-        except APIClientError:
-            logger.warning("Polygon option metrics unavailable", ticker=ticker)
-            return {}
+        chain_payload = option_chain
+        if chain_payload is None:
+            try:
+                chain_payload = self.collect_option_chain(ticker, use_cache=use_cache)
+            except APIClientError:
+                logger.warning("Option chain unavailable; skipping metrics build", ticker=ticker)
+                chain_payload = {}
 
-        metrics: Dict[str, Any] = {}
-        for contract in contracts:
-            payload = self._serialize_payload(contract) or {}
-            symbol = payload.get("ticker") or payload.get("symbol")
-            if not symbol:
-                continue
-            greeks = payload.get("greeks") or {}
-            metrics[symbol] = {
-                "contract_type": payload.get("contract_type"),
-                "expiration_date": payload.get("expiration_date"),
-                "strike_price": payload.get("strike_price"),
-                "implied_volatility": payload.get("implied_volatility"),
-                "open_interest": payload.get("open_interest"),
-                "greeks": greeks,
-                "last_quote": payload.get("last_quote") or {},
-            }
-        if metrics:
+        metrics = self._metrics_from_option_chain(chain_payload)
+        if metrics and use_cache:
             self.cache.write_json(metrics, *cache_key)
         return metrics
 
@@ -232,9 +180,9 @@ class MarketDataCollector:
         self,
         ticker: str,
         *,
-        option_chain: Any | None = None,
+        option_chain: Optional[Any] = None,
         option_metrics: Optional[Dict[str, Any]] = None,
-        bars: pd.DataFrame | None = None,
+        bars: pd.Optional[DataFrame] = None,
         use_cache: bool = False,
     ) -> Dict[str, Any]:
         """Derive representative call/put quotes from the option chain payload."""
@@ -260,7 +208,7 @@ class MarketDataCollector:
         timeframe: str = "1Min",
         use_cache: bool = True,
     ) -> Dict[str, Any]:
-        """Fetch Polygon option aggregates for the representative call/put selections."""
+        """Fetch Alpaca option bars for the representative call/put selections."""
 
         if not self.settings.enable_option_aggregates:
             logger.debug("Skipping option aggregates (disabled via settings)")
@@ -274,31 +222,32 @@ class MarketDataCollector:
             symbol = quote.get("symbol")
             if not symbol:
                 continue
-            if not symbol.startswith("O:"):
-                symbol = f"O:{symbol}"
-            cache_key = ("polygon", "option-aggs", symbol, timeframe, now_bucket)
+            cache_key = ("alpaca", "option-bars", symbol, timeframe, now_bucket)
             if use_cache and self.cache.exists(*cache_key, suffix=".json"):
                 aggregates[leg] = self.cache.read_json(*cache_key)
                 continue
             try:
-                payload = list(
-                    self.polygon.fetch_option_aggregates(
-                        symbol=symbol,
-                        multiplier=1,
-                        timespan=_polygon_timespan(timeframe),
-                        start=start,
-                        end=end,
-                        limit=5000,
-                    )
+                payload = self.alpaca.fetch_option_bars(
+                    symbol=symbol,
+                    start=start,
+                    end=end,
+                    timeframe=timeframe,
                 )
+                frame = self._frame_from_payload(payload)
             except APIClientError as exc:
                 logger.warning(
-                    "Polygon option aggregates unavailable",
+                    "Alpaca option aggregates unavailable",
                     symbol=symbol,
                     error=str(exc),
                 )
                 continue
-            serialized = self._serialize_payload(payload)
+            if isinstance(frame, pd.DataFrame) and not frame.empty:
+                frame = frame.copy()
+                if "timestamp" in frame.columns:
+                    frame["timestamp"] = pd.to_datetime(frame["timestamp"]).astype(str)
+                serialized = frame.to_dict(orient="records")
+            else:
+                serialized = []
             if serialized:
                 aggregates[leg] = serialized
                 if use_cache:
@@ -331,7 +280,7 @@ class MarketDataCollector:
     def _select_reference_quotes(
         self,
         option_chain: Any,
-        bars: pd.DataFrame | None = None,
+        bars: pd.Optional[DataFrame] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """Pick representative call/put contracts near the underlying price."""
 
@@ -385,12 +334,56 @@ class MarketDataCollector:
                 best[option_type] = (score, payload)
         return {opt_type: payload for opt_type, (_, payload) in best.items()}
 
+    def _metrics_from_option_chain(self, option_chain: Any) -> Dict[str, Any]:
+        """Normalize option chain entries into a metrics map keyed by symbol."""
+
+        def _iter_contracts(chain: Any) -> Iterable[Dict[str, Any]]:
+            if isinstance(chain, dict):
+                yield from chain.values()
+            elif isinstance(chain, list):
+                yield from chain
+
+        metrics: Dict[str, Any] = {}
+        limit = max(int(self.settings.option_metrics_limit or 0), 0)
+        for idx, contract in enumerate(_iter_contracts(option_chain)):
+            if limit and idx >= limit:
+                break
+            payload = self._serialize_payload(contract) or {}
+            if not isinstance(payload, dict):
+                continue
+            symbol = str(payload.get("symbol") or payload.get("ticker") or "").strip()
+            if not symbol:
+                continue
+            expiration = payload.get("expiration_date")
+            if hasattr(expiration, "isoformat"):
+                expiration = expiration.isoformat()
+            contract_type = str(payload.get("contract_type") or "").upper()
+            strike = payload.get("strike") or payload.get("strike_price")
+            if not contract_type or strike is None or not expiration:
+                parsed_exp, parsed_type, parsed_strike = _parse_option_symbol(symbol)
+                expiration = expiration or (parsed_exp.isoformat() if parsed_exp else None)
+                contract_type = contract_type or (parsed_type or "")
+                strike = strike if strike is not None else parsed_strike
+            greeks = payload.get("greeks") or {}
+            metrics[symbol] = {
+                "contract_type": contract_type,
+                "expiration_date": expiration,
+                "strike_price": strike,
+                "implied_volatility": payload.get("implied_volatility") or greeks.get("iv"),
+                "open_interest": payload.get("open_interest"),
+                "greeks": greeks,
+                "last_quote": payload.get("latest_quote") or payload.get("quote") or {},
+                "latest_trade": payload.get("latest_trade") or payload.get("trade") or {},
+                "source": "alpaca",
+            }
+        return metrics
+
     def _quotes_from_option_metrics(
         self,
         option_metrics: Dict[str, Any],
-        bars: pd.DataFrame | None = None,
+        bars: pd.Optional[DataFrame] = None,
     ) -> Dict[str, Dict[str, Any]]:
-        """Fallback: synthesize quotes from Polygon option metrics when Alpaca chain fails."""
+        """Fallback: synthesize quotes from derived option metrics when the chain is missing."""
 
         price = None
         if isinstance(bars, pd.DataFrame) and not bars.empty and "close" in bars:
@@ -427,7 +420,7 @@ class MarketDataCollector:
                 "bid": bid,
                 "ask": ask,
                 "mid": (bid + ask) / 2 if ask is not None else bid,
-                "source": "polygon",
+                "source": "alpaca",
             }
             if price is not None:
                 candidate["underlying_price"] = price
@@ -436,7 +429,7 @@ class MarketDataCollector:
                 best[leg] = (score, candidate)
         quotes = {leg: payload for leg, (_, payload) in best.items()}
         if quotes:
-            logger.debug("Using Polygon option metrics fallback for quotes", legs=list(quotes.keys()))
+            logger.debug("Using option metrics fallback for quotes", legs=list(quotes.keys()))
         return quotes
 
     def _frame_from_latest_trade(self, ticker: str) -> pd.DataFrame:
@@ -495,7 +488,11 @@ class MarketDataCollector:
                 logger.warning("Option chain unavailable", ticker=ticker, error=str(exc))
                 option_chain = {}
             try:
-                option_metrics = self.collect_option_metrics(ticker, use_cache=use_cache)
+                option_metrics = self.collect_option_metrics(
+                    ticker,
+                    option_chain=option_chain,
+                    use_cache=use_cache,
+                )
             except APIClientError as exc:
                 logger.warning("Option metrics unavailable", ticker=ticker, error=str(exc))
                 option_metrics = {}
@@ -534,17 +531,6 @@ class MarketDataCollector:
                 "news": news_items,
             }
         return snapshot
-
-
-def _polygon_timespan(timeframe: str) -> str:
-    mapping = {
-        "1Min": "minute",
-        "5Min": "minute",
-        "15Min": "minute",
-        "1Hour": "hour",
-        "1Day": "day",
-    }
-    return mapping.get(timeframe, "minute")
 
 
 def _normalize_trade_payload(trade_resp: Any) -> Dict[str, Any]:

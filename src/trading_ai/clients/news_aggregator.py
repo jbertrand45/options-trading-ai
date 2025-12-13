@@ -1,4 +1,4 @@
-"""Aggregates news across Polygon, Yahoo, Alpha Vantage, Marketaux, and NewsAPI."""
+"""Aggregates news across Yahoo, Alpha Vantage, Marketaux, and NewsAPI."""
 
 from __future__ import annotations
 
@@ -11,10 +11,9 @@ from trading_ai.clients.alpha_vantage_client import AlphaVantageNewsClient
 from trading_ai.clients.base import APIClientError
 from trading_ai.clients.marketaux_client import MarketauxClient
 from trading_ai.clients.news_client import NewsClient
-from trading_ai.clients.polygon_client import PolygonClient
 from trading_ai.clients.yahoo_client import YahooNewsClient
 
-ProviderFn = Callable[[str, datetime | None, int], List[Dict[str, Any]]]
+ProviderFn = Callable[[str, Optional[datetime], int], List[Dict[str, Any]]]
 
 
 class NewsAggregator:
@@ -23,15 +22,12 @@ class NewsAggregator:
     def __init__(
         self,
         *,
-        polygon_client: Optional[PolygonClient] = None,
         news_api_client: Optional[NewsClient] = None,
         yahoo_client: Optional[YahooNewsClient] = None,
         alpha_client: Optional[AlphaVantageNewsClient] = None,
         marketaux_client: Optional[MarketauxClient] = None,
     ) -> None:
         self.providers: List[ProviderFn] = []
-        if polygon_client:
-            self.providers.append(lambda ticker, since, limit: list(polygon_client.fetch_reference_news(ticker=ticker, published_gte=since, limit=limit)))
         if yahoo_client:
             self.providers.append(lambda ticker, since, limit: yahoo_client.fetch_headlines(ticker=ticker, since=since, limit=limit))
         if alpha_client:

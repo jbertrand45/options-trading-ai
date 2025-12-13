@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import requests
 from loguru import logger
@@ -18,7 +18,7 @@ class AlphaVantageNewsClient(BaseClient):
         super().__init__("alpha_vantage")
         self._api_key = api_key
 
-    def fetch_headlines(self, ticker: str, *, since: datetime | None = None, limit: int = 50) -> List[Dict[str, Any]]:
+    def fetch_headlines(self, ticker: str, *, since: Optional[datetime] = None, limit: int = 50) -> List[Dict[str, Any]]:
         params = {
             "function": "NEWS_SENTIMENT",
             "tickers": ticker,

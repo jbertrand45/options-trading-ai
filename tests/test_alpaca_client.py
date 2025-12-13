@@ -18,6 +18,7 @@ class DummySession:
 class DummyOptionClient:
     def __init__(self, *args, **kwargs) -> None:
         self._session = DummySession()
+        self.oauth_token = kwargs.get("oauth_token")
 
 
 class DummyEquityClient(DummyOptionClient):
@@ -25,13 +26,14 @@ class DummyEquityClient(DummyOptionClient):
 
 
 class DummyTradingClient(DummyOptionClient):
-    pass
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.oauth_access_token = kwargs.get("oauth_access_token")
 
 
 def build_settings(monkeypatch: pytest.MonkeyPatch, *, verify_tls: str = "1", ca_bundle: str | None = None) -> Settings:
     monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
-    monkeypatch.setenv("POLYGON_API_KEY", "polygon")
     monkeypatch.setenv("ALPACA_DATA_FEED", "IEX")
     monkeypatch.setenv("ALPACA_VERIFY_TLS", verify_tls)
     if ca_bundle is not None:
@@ -65,3 +67,16 @@ def test_alpaca_client_uses_custom_ca_bundle(monkeypatch: pytest.MonkeyPatch, tm
     client = AlpacaClient(settings)
 
     assert client._option_client._session.verify == str(cert_path)  # type: ignore[attr-defined]
+
+
+def test_alpaca_client_uses_oauth_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
+    monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
+    monkeypatch.setenv("ALPACA_OAUTH_TOKEN", "oauth-token")
+    monkeypatch.setenv("ALPACA_DATA_FEED", "IEX")
+    settings = Settings()
+
+    client = AlpacaClient(settings)
+
+    assert client._trading_client.oauth_access_token == "oauth-token"  # type: ignore[attr-defined]
+    assert client._option_client.oauth_token == "oauth-token"  # type: ignore[attr-defined]

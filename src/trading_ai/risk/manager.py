@@ -23,10 +23,10 @@ class RiskManager:
     def __init__(
         self,
         *,
-        max_daily_loss_pct: float = 0.05,
+        max_daily_loss_pct: float = 0.03,
         min_confidence: float = 0.2,
-        max_spread_pct: float = 0.35,
-        min_liquidity: float = 25.0,
+        max_spread_pct: float = 0.25,
+        min_liquidity: float = 50.0,
     ) -> None:
         self.max_daily_loss_pct = max_daily_loss_pct
         self.min_confidence = min_confidence

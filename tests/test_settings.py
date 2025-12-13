@@ -11,7 +11,6 @@ def test_settings_parses_comma_separated_tickers(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
     monkeypatch.delenv("NEWS_API_KEY", raising=False)
-    monkeypatch.setenv("POLYGON_API_KEY", "polygon")
     monkeypatch.setenv("TARGET_TICKERS", '["spy","qqq","tsla"]')
 
     settings = Settings()
@@ -22,7 +21,6 @@ def test_settings_parses_comma_separated_tickers(monkeypatch: pytest.MonkeyPatch
 def test_settings_alpaca_data_feed_defaults_to_iex(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
-    monkeypatch.setenv("POLYGON_API_KEY", "polygon")
     monkeypatch.delenv("ALPACA_DATA_FEED", raising=False)
 
     settings = Settings()
@@ -33,7 +31,6 @@ def test_settings_alpaca_data_feed_defaults_to_iex(monkeypatch: pytest.MonkeyPat
 def test_settings_loads_option_agg_thresholds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
-    monkeypatch.setenv("POLYGON_API_KEY", "polygon")
     monkeypatch.setenv("MIN_OPTION_AGG_BARS", "25")
     monkeypatch.setenv("MIN_OPTION_AGG_VOLUME", "123.5")
     monkeypatch.setenv("MIN_OPTION_AGG_VWAP", "0.04")

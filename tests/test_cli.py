@@ -45,7 +45,6 @@ def test_auto_trade_parser_accepts_risk_flags() -> None:
 def test_command_auto_trade_uses_env_option_filters(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALPACA_API_KEY_ID", "key")
     monkeypatch.setenv("ALPACA_API_SECRET_KEY", "secret")
-    monkeypatch.setenv("POLYGON_API_KEY", "polygon")
     monkeypatch.setenv("MIN_OPTION_AGG_BARS", "30")
     monkeypatch.setenv("MIN_OPTION_AGG_VOLUME", "222.2")
     monkeypatch.setenv("MIN_OPTION_AGG_VWAP", "0.06")
@@ -85,9 +84,13 @@ def test_command_auto_trade_uses_env_option_filters(monkeypatch: pytest.MonkeyPa
         min_option_agg_vwap=None,
         max_option_spread_pct=0.4,
         min_option_liquidity=10.0,
+        stop_loss_fraction=None,
+        take_profit_reward=None,
+        option_order_mode=None,
         include_news=None,
         use_cache=None,
         use_snapshot_stream=None,
+        use_live_stream=None,
         stream_interval=None,
         stream_force_refresh=None,
         loop=False,

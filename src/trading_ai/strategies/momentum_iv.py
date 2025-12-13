@@ -140,7 +140,7 @@ class MomentumIVStrategy(TradingStrategy):
             end = float(window[-1])
         except (TypeError, ValueError):
             return 0.0
-        if start == 0:
+        if abs(start) < 1e-9:  # Protect against near-zero or zero division
             return 0.0
         return (end - start) / start
 
@@ -169,7 +169,7 @@ class MomentumIVStrategy(TradingStrategy):
             end = float(window[-1])
         except (TypeError, ValueError):
             return 0.0
-        if start == 0:
+        if abs(start) < 1e-9:  # Protect against near-zero or zero division
             return 0.0
         return (end - start) / start
 

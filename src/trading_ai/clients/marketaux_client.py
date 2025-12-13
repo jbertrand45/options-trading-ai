@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import requests
 from loguru import logger
@@ -18,7 +18,7 @@ class MarketauxClient(BaseClient):
         super().__init__("marketaux")
         self._token = api_token
 
-    def fetch_headlines(self, ticker: str, *, since: datetime | None = None, limit: int = 50) -> List[Dict[str, Any]]:
+    def fetch_headlines(self, ticker: str, *, since: Optional[datetime] = None, limit: int = 50) -> List[Dict[str, Any]]:
         params = {
             "symbols": ticker,
             "api_token": self._token,

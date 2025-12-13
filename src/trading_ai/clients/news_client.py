@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, Iterable, Optional
 
 import requests
 from loguru import logger
@@ -21,7 +21,7 @@ class NewsClient(BaseClient):
         if not self._api_key:
             logger.warning("News API key is not configured; news ingestion will be disabled.")
 
-    def fetch_headlines(self, ticker: str, from_date: datetime | None = None, limit: int = 50) -> Iterable[Dict[str, Any]]:
+    def fetch_headlines(self, ticker: str, from_date: Optional[datetime] = None, limit: int = 50) -> Iterable[Dict[str, Any]]:
         """Fetch recent headlines related to a ticker."""
 
         if not self._api_key:

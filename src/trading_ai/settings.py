@@ -1,7 +1,7 @@
 """Application-wide configuration management using Pydantic settings."""
 
 from functools import lru_cache
-from typing import List
+from typing import List, Optional, Union
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -16,18 +16,16 @@ class Settings(BaseSettings):
     alpaca_api_secret_key: str = Field(..., alias="ALPACA_API_SECRET_KEY")
     alpaca_paper_base_url: str = Field("https://paper-api.alpaca.markets", alias="ALPACA_PAPER_BASE_URL")
     alpaca_data_feed: str = Field("IEX", alias="ALPACA_DATA_FEED")
-    alpaca_data_override_ip: str | None = Field(None, alias="ALPACA_DATA_OVERRIDE_IP")
-    alpaca_ca_bundle: str | None = Field(None, alias="ALPACA_CA_BUNDLE")
+    alpaca_data_override_ip: Optional[str] = Field(None, alias="ALPACA_DATA_OVERRIDE_IP")
+    alpaca_ca_bundle: Optional[str] = Field(None, alias="ALPACA_CA_BUNDLE")
     alpaca_verify_tls: bool = Field(True, alias="ALPACA_VERIFY_TLS")
-    alpaca_paper_account: bool = Field(True, alias="ALPACA_PAPER_ACCOUNT")
+    alpaca_paper_account: bool = Field(True, alias="ALPACA_PAPER_ACCOUNT")  # SAFE DEFAULT: paper trading
+    alpaca_oauth_token: Optional[str] = Field(None, alias="ALPACA_OAUTH_TOKEN")
 
-    polygon_api_key: str = Field(..., alias="POLYGON_API_KEY")
-    polygon_base_url: str = Field("https://api.polygon.io", alias="POLYGON_BASE_URL")
-    polygon_api_override_ip: str | None = Field(None, alias="POLYGON_API_OVERRIDE_IP")
-    news_api_key: str | None = Field(None, alias="NEWS_API_KEY")
-    news_secret_key: str | None = Field(None, alias="NEWS_SECRET_KEY")
-    alpha_vantage_api_key: str | None = Field(None, alias="ALPHA_VANTAGE_API_KEY")
-    marketaux_api_key: str | None = Field(None, alias="MARKETAUX_API_KEY")
+    news_api_key: Optional[str] = Field(None, alias="NEWS_API_KEY")
+    news_secret_key: Optional[str] = Field(None, alias="NEWS_SECRET_KEY")
+    alpha_vantage_api_key: Optional[str] = Field(None, alias="ALPHA_VANTAGE_API_KEY")
+    marketaux_api_key: Optional[str] = Field(None, alias="MARKETAUX_API_KEY")
 
     target_tickers: List[str] = Field(
         default_factory=lambda: [
@@ -47,7 +45,6 @@ class Settings(BaseSettings):
     )
     log_level: str = Field("INFO", alias="LOG_LEVEL")
     enable_news: bool = Field(True, alias="ENABLE_NEWS")
-    use_polygon_bars: bool = Field(False, alias="USE_POLYGON_BARS")
     option_metrics_limit: int = Field(300, alias="OPTION_METRICS_LIMIT")
     enable_underlying_bars: bool = Field(True, alias="ENABLE_UNDERLYING_BARS")
     use_alpaca_option_chain: bool = Field(True, alias="USE_ALPACA_OPTION_CHAIN")
@@ -61,14 +58,20 @@ class Settings(BaseSettings):
     auto_use_snapshot_stream: bool = Field(False, alias="AUTO_USE_SNAPSHOT_STREAM")
     auto_stream_interval_seconds: float = Field(60.0, alias="AUTO_STREAM_INTERVAL_SECONDS")
     auto_stream_force_refresh: bool = Field(False, alias="AUTO_STREAM_FORCE_REFRESH")
-    enable_option_aggregates: bool = Field(True, alias="ENABLE_OPTION_AGGREGATES")
+    auto_use_live_stream: bool = Field(False, alias="AUTO_USE_LIVE_STREAM")
+    auto_stop_loss_fraction: float = Field(0.03, alias="AUTO_STOP_LOSS_FRACTION")
+    auto_take_profit_reward: float = Field(2.5, alias="AUTO_TAKE_PROFIT_REWARD")
+    auto_order_mode: str = Field("auto", alias="AUTO_ORDER_MODE")
+    enable_option_aggregates: bool = Field(False, alias="ENABLE_OPTION_AGGREGATES")
+    max_option_spread_pct: float = Field(0.25, alias="MAX_OPTION_SPREAD_PCT")
+    min_option_liquidity: float = Field(50.0, alias="MIN_OPTION_LIQUIDITY")
     min_option_agg_bars: int = Field(0, alias="MIN_OPTION_AGG_BARS")
     min_option_agg_volume: float = Field(0.0, alias="MIN_OPTION_AGG_VOLUME")
     min_option_agg_vwap: float = Field(0.0, alias="MIN_OPTION_AGG_VWAP")
 
     @field_validator("target_tickers", mode="before")
     @classmethod
-    def _split_tickers(cls, value: List[str] | str) -> List[str]:
+    def _split_tickers(cls, value: Union[List[str], str]) -> List[str]:
         """Support comma-separated ticker strings in environment variables."""
 
         if isinstance(value, list):

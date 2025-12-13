@@ -9,8 +9,10 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Callable, Dict, Iterable, Optional, Sequence
 
+import pandas as pd
 from loguru import logger
 
+from trading_ai.clients.alpaca_stream import AlpacaStream
 from trading_ai.core.pipeline import SignalPipeline
 
 Snapshot = Dict[str, Any]
@@ -38,9 +40,11 @@ class SnapshotStream:
         pipeline: SignalPipeline,
         *,
         config: Optional[SnapshotStreamConfig] = None,
+        live_stream: Optional[AlpacaStream] = None,
     ) -> None:
         self.pipeline = pipeline
         self.config = config or SnapshotStreamConfig()
+        self.live_stream = live_stream
         self._tickers: Optional[Sequence[str]] = (
             tuple(self.config.tickers) if self.config.tickers is not None else None
         )
@@ -105,6 +109,7 @@ class SnapshotStream:
             use_cache=self.config.use_cache,
             include_news=self.config.include_news,
         )
+        snapshot = self._merge_live_bars(snapshot)
         callbacks: list[SnapshotCallback]
         with self._lock:
             self._latest_snapshot = snapshot
@@ -134,3 +139,67 @@ class SnapshotStream:
                 logger.warning("SnapshotStream refresh failed", error=str(exc))
             if self._stop_event.wait(interval):
                 break
+
+    # ------------------------------------------------------------------- live merge
+
+    def _merge_live_bars(self, snapshot: Snapshot) -> Snapshot:
+        """Blend latest live bars into the snapshot if a stream is attached."""
+
+        if not self.live_stream:
+            return snapshot
+        latest = self.live_stream.latest_bars()
+        if not latest:
+            return snapshot
+        for ticker, bar in latest.items():
+            if ticker not in snapshot:
+                continue
+            bar_row = self._normalize_bar(bar)
+            if not bar_row:
+                continue
+            existing = snapshot[ticker].get("underlying_bars")
+            if isinstance(existing, pd.DataFrame):
+                if not existing.empty and "timestamp" in existing.columns:
+                    if str(bar_row["timestamp"]) in set(existing["timestamp"].astype(str)):
+                        continue
+                bar_df = pd.DataFrame([bar_row])
+                snapshot[ticker]["underlying_bars"] = pd.concat([existing, bar_df], ignore_index=True)
+            elif isinstance(existing, list):
+                if any(str(item.get("timestamp")) == str(bar_row["timestamp"]) for item in existing):
+                    continue
+                snapshot[ticker]["underlying_bars"] = existing + [bar_row]
+            else:
+                snapshot[ticker]["underlying_bars"] = [bar_row]
+        return snapshot
+
+    def _normalize_bar(self, bar: Any) -> Dict[str, Any]:
+        if bar is None:
+            return {}
+        if hasattr(bar, "model_dump"):
+            payload = bar.model_dump()
+        elif isinstance(bar, dict):
+            payload = dict(bar)
+        elif hasattr(bar, "__dict__"):
+            payload = dict(bar.__dict__)
+        else:
+            return {}
+        ts = payload.get("timestamp") or payload.get("t")
+        if hasattr(ts, "isoformat"):
+            ts = ts.isoformat()
+        if ts is None:
+            return {}
+        try:
+            open_p = float(payload.get("open") or payload.get("o"))
+            high = float(payload.get("high") or payload.get("h"))
+            low = float(payload.get("low") or payload.get("l"))
+            close = float(payload.get("close") or payload.get("c"))
+            volume = float(payload.get("volume") or payload.get("v") or 0.0)
+        except (TypeError, ValueError):
+            return {}
+        return {
+            "timestamp": ts,
+            "open": open_p,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+        }
