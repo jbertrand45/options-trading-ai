@@ -19,9 +19,9 @@ from alpaca.data.timeframe import TimeFrame
 API_KEY = os.getenv("ALPACA_API_KEY_ID", "AK3FLIZ5DLA5GVPEXRM75QTYHT")
 API_SECRET = os.getenv("ALPACA_API_SECRET_KEY", "2DqpuY1Yw1v92izySSqfC1YjhazPm6ffio7QrLHow7h9")
 
-# Stock Selection - Liquid stocks under $20
-TICKERS = ["F", "NIO", "PLUG", "SOFI", "PLTR", "AAL", "CCL", "RIVN"]
-MAX_POSITION_SIZE = 200.0  # Max $200 per position
+# Stock Selection - Mix of volatile and liquid stocks
+TICKERS = ["F", "NIO", "PLUG", "SOFI", "AMD", "NVDA", "TSLA", "PLTR", "RIVN"]
+MAX_POSITION_SIZE = 600.0  # Max $600 per position (can buy TSLA)
 MIN_POSITION_SIZE = 50.0   # Min $50 per position
 MAX_POSITIONS = 3
 MAX_DAILY_TRADES = 5
@@ -113,10 +113,10 @@ def get_stock_price(ticker):
 
 
 def check_momentum(ticker):
-    """Simple momentum check: is stock up in last 5 minutes?"""
+    """ULTRA AGGRESSIVE: Buy on ANY upward movement"""
     try:
         end = datetime.datetime.now(pytz.UTC)
-        start = end - datetime.timedelta(minutes=10)
+        start = end - datetime.timedelta(minutes=2)  # Just last 2 minutes
 
         req = StockBarsRequest(
             symbol_or_symbols=[ticker],
@@ -133,12 +133,15 @@ def check_momentum(ticker):
         if len(bars_list) < 2:
             return False
 
-        # Check if trending up
+        # Just check if price went up AT ALL
         recent_close = float(bars_list[-1].close)
         older_close = float(bars_list[0].close)
         change_pct = (recent_close - older_close) / older_close
 
-        return change_pct > 0.002  # Up more than 0.2% (more aggressive)
+        log(f"    Change: {change_pct*100:+.3f}%")
+
+        # Buy if price went up AT ALL (even 0.001%)
+        return change_pct > 0
 
     except Exception as e:
         log(f"  Error checking momentum for {ticker}: {e}")
@@ -149,7 +152,7 @@ def buy_stock(ticker, price):
     """Buy stock with market order"""
     try:
         # Calculate quantity
-        position_size = min(MAX_POSITION_SIZE, 150.0)  # Start with $150
+        position_size = MAX_POSITION_SIZE  # Use full max position size
         qty = int(position_size / price)
 
         if qty < 1:
@@ -301,9 +304,9 @@ def scan_for_trades():
 
         log(f"  Price: ${price:.2f}")
 
-        # Check if we can afford it
-        min_qty = int(MIN_POSITION_SIZE / price)
-        if min_qty < 1:
+        # Check if we can afford it with max position size
+        qty = int(MAX_POSITION_SIZE / price)
+        if qty < 1:
             log(f"  ⏭️  Too expensive")
             continue
 
