@@ -51,7 +51,7 @@ class AutoTraderConfig:
     stop_loss_fraction: float = 0.03
     take_profit_reward: float = 2.5
     refresh_account_equity: bool = True
-    option_order_mode: str = "cash_secured"  # long | cash_secured | auto
+    option_order_mode: str = "auto"  # long | cash_secured | auto
     enable_exit_monitor: bool = True
     exit_log_scan_lines: int = 500
     enable_option_aggregates: bool = False
@@ -187,7 +187,7 @@ class AutoTrader:
             logger.debug("Skipping signal without price", ticker=context.ticker)
             return None
         option_symbol = self._option_symbol(context, signal.direction)
-        order_mode = (self.config.option_order_mode or "cash_secured").lower()
+        order_mode = (self.config.option_order_mode or "auto").lower()
         spread_override: Optional[float] = None
         if order_mode == "cash_secured" and signal.direction == "PUT":
             entry_price, option_symbol, spread_override = self._maybe_select_affordable_put(
@@ -205,27 +205,23 @@ class AutoTrader:
             logger.debug("Skipping signal without option symbol", ticker=context.ticker, direction=signal.direction)
             return None
 
-        # Initialize aggregate data
-        if self.config.enable_option_aggregates:
-            agg_stats = self._aggregate_health(context, signal.direction)
-            agg_vwap = self._aggregate_vwap_trend(context, signal.direction)
-            if (
-                agg_stats["bars"] < self.config.min_option_agg_bars
-                or agg_stats["volume"] < self.config.min_option_agg_volume
-                or abs(agg_vwap) < self.config.min_option_agg_vwap
-            ):
-                logger.debug(
-                    "Skipping signal due to insufficient option aggregate data",
-                    ticker=context.ticker,
-                    bars=agg_stats["bars"],
-                    volume=agg_stats["volume"],
-                    vwap=agg_vwap,
-                )
-                return None
-        else:
-            # Set defaults when aggregates disabled
-            agg_stats = {"bars": 0, "volume": 0}
-            agg_vwap = 0.0
+        # Always compute aggregate metadata for diagnostics, but only enforce aggregate
+        # thresholds when explicitly enabled.
+        agg_stats = self._aggregate_health(context, signal.direction)
+        agg_vwap = self._aggregate_vwap_trend(context, signal.direction)
+        if self.config.enable_option_aggregates and (
+            agg_stats["bars"] < self.config.min_option_agg_bars
+            or agg_stats["volume"] < self.config.min_option_agg_volume
+            or abs(agg_vwap) < self.config.min_option_agg_vwap
+        ):
+            logger.debug(
+                "Skipping signal due to insufficient option aggregate data",
+                ticker=context.ticker,
+                bars=agg_stats["bars"],
+                volume=agg_stats["volume"],
+                vwap=agg_vwap,
+            )
+            return None
         # DISABLED: option_is_tradable() check causes hangs
         # if option_symbol and not self.alpaca.option_is_tradable(option_symbol):
         #     logger.debug("Skipping non-tradable option", ticker=context.ticker, option=option_symbol)
@@ -344,12 +340,13 @@ class AutoTrader:
             return {"status": "MISSING_SYMBOL", "order_id": None}
 
         # Validate account has options trading approval
-        if not self.alpaca.check_options_trading_enabled():
+        check_options_enabled = getattr(self.alpaca, "check_options_trading_enabled", None)
+        if callable(check_options_enabled) and not check_options_enabled():
             error_msg = "Account not approved for options trading - check Alpaca account settings"
             logger.error(error_msg, ticker=intent.ticker)
             return {"status": "ERROR", "error": error_msg}
 
-        mode = (intent.metadata or {}).get("order_mode") or (self.config.option_order_mode or "cash_secured").lower()
+        mode = (intent.metadata or {}).get("order_mode") or (self.config.option_order_mode or "auto").lower()
         side = _direction_to_side(intent.direction, mode)
         position_intent = _direction_to_position_intent(intent.direction, mode)
         try:

@@ -181,7 +181,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--stop-loss-fraction",
         type=float,
         default=None,
-        help="Fractional stop-loss per trade (e.g., 0.03 = 3% below entry).",
+        help="Fractional stop-loss per trade (e.g., 0.03 = 3%% below entry).",
     )
     auto.add_argument(
         "--take-profit-reward",
